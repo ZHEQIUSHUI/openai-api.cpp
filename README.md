@@ -193,17 +193,17 @@ struct ASRRequest {
 
 ```bash
 mkdir build && cd build
-cmake .. -DBUILD_EXAMPLES=ON -DBUILD_TESTS=ON
+cmake .. -DOPENAI_API_BUILD_EXAMPLES=ON -DOPENAI_API_BUILD_TESTS=ON
 make -j4
 
 # 运行测试
-./test_provider
-./test_encoder
-./test_integration
+./openai_api_test_provider
+./openai_api_test_encoder
+./openai_api_test_integration
 
 # 运行示例
-./examples/qwen_server/qwen_server 8080
-./examples/whisper_sensevoice/whisper_sensevoice 8080
+./examples/qwen_server/openai_api_example_qwen 8080
+./examples/whisper_sensevoice/openai_api_example_whisper 8080
 ```
 
 ## 安装

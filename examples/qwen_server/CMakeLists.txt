@@ -1,2 +1,2 @@
-add_executable(qwen_server main.cpp)
-target_link_libraries(qwen_server PRIVATE openai_api::server)
+add_executable(openai_api_example_qwen main.cpp)
+target_link_libraries(openai_api_example_qwen PRIVATE openai_api::server)

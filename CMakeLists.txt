@@ -4,9 +4,9 @@ project(OpenAIAPIServer VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 选项
-option(BUILD_EXAMPLES "Build examples" ON)
-option(BUILD_TESTS "Build tests" ON)
+# 选项（使用项目前缀避免与其他项目冲突）
+option(OPENAI_API_BUILD_EXAMPLES "Build openai-api.cpp examples" ON)
+option(OPENAI_API_BUILD_TESTS "Build openai-api.cpp tests" ON)
 
 # 包含目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -33,28 +33,28 @@ target_link_libraries(openai_api PUBLIC
 add_library(openai_api::server ALIAS openai_api)
 
 # ============ 可执行文件 ============
-add_executable(openai_server src/main.cpp)
-target_link_libraries(openai_server PRIVATE openai_api)
+add_executable(openai_api_server src/main.cpp)
+target_link_libraries(openai_api_server PRIVATE openai_api)
 
 # ============ 测试 ============
-if(BUILD_TESTS)
+if(OPENAI_API_BUILD_TESTS)
     enable_testing()
     
-    add_executable(test_provider tests/test_provider.cpp)
-    target_link_libraries(test_provider PRIVATE openai_api)
-    add_test(NAME provider_test COMMAND test_provider)
+    add_executable(openai_api_test_provider tests/test_provider.cpp)
+    target_link_libraries(openai_api_test_provider PRIVATE openai_api)
+    add_test(NAME openai_api_provider_test COMMAND openai_api_test_provider)
     
-    add_executable(test_encoder tests/test_encoder.cpp)
-    target_link_libraries(test_encoder PRIVATE openai_api)
-    add_test(NAME encoder_test COMMAND test_encoder)
+    add_executable(openai_api_test_encoder tests/test_encoder.cpp)
+    target_link_libraries(openai_api_test_encoder PRIVATE openai_api)
+    add_test(NAME openai_api_encoder_test COMMAND openai_api_test_encoder)
     
-    add_executable(test_integration tests/test_integration.cpp)
-    target_link_libraries(test_integration PRIVATE openai_api)
-    add_test(NAME integration_test COMMAND test_integration)
+    add_executable(openai_api_test_integration tests/test_integration.cpp)
+    target_link_libraries(openai_api_test_integration PRIVATE openai_api)
+    add_test(NAME openai_api_integration_test COMMAND openai_api_test_integration)
 endif()
 
 # ============ 示例 ============
-if(BUILD_EXAMPLES)
+if(OPENAI_API_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
@@ -62,7 +62,7 @@ endif()
 include(GNUInstallDirs)
 
 # 安装库
-install(TARGETS openai_api openai_server
+install(TARGETS openai_api openai_api_server
     EXPORT openai_apiTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -105,7 +105,7 @@ install(FILES
 message(STATUS "")
 message(STATUS "OpenAI API Server Library Configuration:")
 message(STATUS "  Version: ${PROJECT_VERSION}")
-message(STATUS "  Build examples: ${BUILD_EXAMPLES}")
-message(STATUS "  Build tests: ${BUILD_TESTS}")
+message(STATUS "  Build examples: ${OPENAI_API_BUILD_EXAMPLES}")
+message(STATUS "  Build tests: ${OPENAI_API_BUILD_TESTS}")
 message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "")

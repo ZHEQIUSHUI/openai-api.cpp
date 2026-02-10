@@ -4,7 +4,7 @@ Complete test suite for OpenAI API compatible server using Python SDK.
 
 Usage:
     # First start the server:
-    cd build && ./openai_server 18099
+    cd build && ./openai_api_server 18099
     
     # Then run this test:
     python3 tests/test_with_openai_sdk.py
