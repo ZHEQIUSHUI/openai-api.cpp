@@ -85,13 +85,8 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     
-    // 创建服务器
-    ServerOptions options;
-    options.port = port;
-    options.max_concurrency = max_concurrency;
-    options.api_key = api_key;
-    
-    g_server = std::make_unique<Server>(options);
+    // 创建服务器（不传入配置，在 run() 时传入）
+    g_server = std::make_unique<Server>();
     
     // 注册模型
     if (models_to_register.empty()) {
@@ -156,6 +151,12 @@ int main(int argc, char* argv[]) {
     std::cout << "Press Ctrl+C to stop" << std::endl;
     std::cout << std::endl;
     
-    g_server->run();
+    // 配置并启动服务器
+    ServerOptions options;
+    options.port = port;
+    options.max_concurrency = max_concurrency;
+    options.api_key = api_key;
+    
+    g_server->run(options);
     return 0;
 }

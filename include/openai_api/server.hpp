@@ -68,17 +68,7 @@ struct ServerOptions {
  */
 class Server {
 public:
-    /**
-     * 创建服务器
-     * @param port 端口号
-     */
-    explicit Server(int port = 8080);
-    
-    /**
-     * 使用配置创建服务器
-     * @param options 服务器配置
-     */
-    explicit Server(const ServerOptions& options);
+    Server();
     
     ~Server();
     
@@ -155,14 +145,29 @@ public:
     
     /**
      * 启动服务器（阻塞调用）
+     * @param port 端口号
      */
-    void run();
+    void run(int port = 8080);
+    
+    /**
+     * 使用配置启动服务器（阻塞调用）
+     * @param options 服务器配置
+     */
+    void run(const ServerOptions& options);
     
     /**
      * 启动服务器（非阻塞）
+     * @param port 端口号
      * @return 后台线程
      */
-    std::thread runAsync();
+    std::thread runAsync(int port = 8080);
+    
+    /**
+     * 使用配置启动服务器（非阻塞）
+     * @param options 服务器配置
+     * @return 后台线程
+     */
+    std::thread runAsync(const ServerOptions& options);
     
     /**
      * 停止服务器

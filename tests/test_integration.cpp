@@ -24,9 +24,8 @@ void test_server_options() {
 void test_model_registration() {
     std::cout << "Test: model_registration... " << std::flush;
     
-    ServerOptions options;
-    options.port = 19000;  // 使用测试端口
-    Server server(options);
+    // 创建服务器（不传配置，run() 时再传入）
+    Server server;
     
     // 注册模型
     server.registerChat("gpt-4", [](const ChatRequest& req, auto provider) {

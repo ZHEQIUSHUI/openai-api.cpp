@@ -9,12 +9,7 @@ namespace openai_api {
 
 // ============ 构造函数/析构函数 ============
 
-Server::Server(int port) {
-    options_.port = port;
-    setupRoutes();
-}
-
-Server::Server(const ServerOptions& options) : options_(options) {
+Server::Server() {
     setupRoutes();
 }
 
@@ -84,7 +79,13 @@ void Server::unregisterModel(const std::string& model_name) {
 
 // ============ 运行控制 ============
 
-void Server::run() {
+void Server::run(int port) {
+    options_.port = port;
+    run(options_);
+}
+
+void Server::run(const ServerOptions& options) {
+    options_ = options;
     running_ = true;
     std::cout << "OpenAI API Server starting on http://" << options_.host << ":" << options_.port << std::endl;
     std::cout << "Max concurrency: " << options_.max_concurrency << std::endl;
@@ -102,8 +103,12 @@ void Server::run() {
     http_server_.listen(options_.host.c_str(), options_.port);
 }
 
-std::thread Server::runAsync() {
-    return std::thread([this]() { run(); });
+std::thread Server::runAsync(int port) {
+    return std::thread([this, port]() { run(port); });
+}
+
+std::thread Server::runAsync(const ServerOptions& options) {
+    return std::thread([this, options]() { run(options); });
 }
 
 void Server::stop() {

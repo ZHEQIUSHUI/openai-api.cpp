@@ -52,9 +52,8 @@ int main(int argc, char* argv[]) {
         port = std::stoi(argv[1]);
     }
     
-    // 创建服务器
-    Server server(port);
-    server.setMaxConcurrency(10);
+    // 创建服务器（全局变量可以在 run() 时再配置）
+    static Server server;
     
     // 注册 Qwen-0.6B 模型
     server.registerChat("qwen-0.6b", [](const ChatRequest& req, std::shared_ptr<BaseDataProvider> provider) {
@@ -221,6 +220,11 @@ int main(int argc, char* argv[]) {
     std::cout << "    -d '{\"model\":\"qwen-vl\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Describe this\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"http://example.com/image.jpg\"}}]}]}'" << std::endl;
     std::cout << std::endl;
     
-    server.run();
+    // 配置并启动服务器
+    ServerOptions options;
+    options.port = port;
+    options.max_concurrency = 10;
+    
+    server.run(options);
     return 0;
 }

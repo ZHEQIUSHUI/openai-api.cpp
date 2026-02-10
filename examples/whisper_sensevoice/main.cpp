@@ -17,7 +17,7 @@ int main(int argc, char* argv[]) {
     }
     
     // 创建服务器
-    Server server(port);
+    Server server;
     
     // 注册 Whisper-1 模型
     server.registerASR("whisper-1", [](const ASRRequest& req, std::shared_ptr<BaseDataProvider> provider) {
@@ -105,6 +105,6 @@ int main(int argc, char* argv[]) {
     std::cout << "    -F \"language=zh\"" << std::endl;
     std::cout << std::endl;
     
-    server.run();
+    server.run(port);
     return 0;
 }
