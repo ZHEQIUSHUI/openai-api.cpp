@@ -21,23 +21,44 @@ namespace openai_api {
  * 2. 生命周期管理（end）
  * 3. 超时管理
  * 4. 阻塞/非阻塞读取
- * 5. 与模型类型完全无关
+ * 5. 可写入状态判断
  */
 class BaseDataProvider {
 public:
     virtual ~BaseDataProvider() = default;
     
-    // 推入数据
-    virtual void push(const OutputChunk& chunk) = 0;
-    virtual void push(OutputChunk&& chunk) = 0;
+    /**
+     * 推入数据
+     * @return true 成功，false 失败（已结束或已断开）
+     */
+    virtual bool push(const OutputChunk& chunk) = 0;
+    virtual bool push(OutputChunk&& chunk) = 0;
     
-    // 标记结束
+    /**
+     * 标记结束
+     */
     virtual void end() = 0;
     
-    // 检查是否已结束
+    /**
+     * 检查是否已结束
+     */
     virtual bool is_ended() = 0;
     
-    // 重置超时计时器
+    /**
+     * 检查是否可写入
+     * @return true 可以 push，false 已结束或已断开
+     */
+    virtual bool is_writable() const = 0;
+    
+    /**
+     * 检查连接是否存活
+     * @return true 连接正常，false 已超时或断开
+     */
+    virtual bool is_alive() const = 0;
+    
+    /**
+     * 重置超时计时器
+     */
     virtual void reset_timeout() = 0;
     
     // 非阻塞弹出
@@ -64,37 +85,68 @@ public:
  * 2. 支持超时自动 end
  * 3. push 自动刷新超时
  * 4. 支持阻塞/非阻塞读取
+ * 5. 可写入状态判断
  */
 class QueueProvider : public BaseDataProvider {
 public:
     explicit QueueProvider(std::chrono::milliseconds timeout = std::chrono::milliseconds(60000))
         : timeout_(timeout)
         , ended_(false)
+        , disconnected_(false)
         , last_activity_(std::chrono::steady_clock::now())
     {}
     
     ~QueueProvider() override = default;
     
-    // 推入数据 - 刷新超时计时器
-    void push(const OutputChunk& chunk) override {
+    /**
+     * 推入数据 - 刷新超时计时器
+     * @return true 成功，false 已结束/断开或超时
+     */
+    bool push(const OutputChunk& chunk) override {
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            
+            // 检查是否可以写入
+            if (ended_ || disconnected_) {
+                return false;
+            }
+            
+            // 检查超时
+            if (check_timeout_locked()) {
+                return false;
+            }
+            
             queue_.push(chunk);
             last_activity_ = std::chrono::steady_clock::now();
         }
         cv_.notify_one();
+        return true;
     }
     
-    void push(OutputChunk&& chunk) override {
+    bool push(OutputChunk&& chunk) override {
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            
+            // 检查是否可以写入
+            if (ended_ || disconnected_) {
+                return false;
+            }
+            
+            // 检查超时
+            if (check_timeout_locked()) {
+                return false;
+            }
+            
             queue_.push(std::move(chunk));
             last_activity_ = std::chrono::steady_clock::now();
         }
         cv_.notify_one();
+        return true;
     }
     
-    // 标记结束
+    /**
+     * 标记结束
+     */
     void end() override {
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -103,14 +155,60 @@ public:
         cv_.notify_all();
     }
     
-    // 检查是否已结束
+    /**
+     * 标记断开连接（客户端断开）
+     */
+    void disconnect() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            disconnected_ = true;
+            ended_ = true;
+        }
+        cv_.notify_all();
+    }
+    
+    /**
+     * 检查是否已结束
+     */
     bool is_ended() override {
         std::lock_guard<std::mutex> lock(mutex_);
         check_timeout_locked();
         return ended_ && queue_.empty();
     }
     
-    // 重置超时计时器
+    /**
+     * 检查是否可写入
+     */
+    bool is_writable() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (ended_ || disconnected_) {
+            return false;
+        }
+        // 检查是否超时
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_activity_);
+        return elapsed <= timeout_;
+    }
+    
+    /**
+     * 检查连接是否存活
+     */
+    bool is_alive() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (disconnected_ || ended_) {
+            return false;
+        }
+        // 检查是否超时
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_activity_);
+        return elapsed <= timeout_;
+    }
+    
+    /**
+     * 重置超时计时器
+     */
     void reset_timeout() override {
         std::lock_guard<std::mutex> lock(mutex_);
         last_activity_ = std::chrono::steady_clock::now();
@@ -139,7 +237,7 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         
         cv_.wait(lock, [this] {
-            return !queue_.empty() || ended_ || check_timeout_locked();
+            return !queue_.empty() || ended_ || disconnected_ || check_timeout_locked();
         });
         
         if (check_timeout_locked()) {
@@ -160,7 +258,7 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         
         bool has_data = cv_.wait_for(lock, wait_timeout, [this] {
-            return !queue_.empty() || ended_ || check_timeout_locked();
+            return !queue_.empty() || ended_ || disconnected_ || check_timeout_locked();
         });
         
         if (!has_data) {
@@ -221,6 +319,7 @@ private:
     
     std::chrono::milliseconds timeout_;
     std::atomic<bool> ended_;
+    std::atomic<bool> disconnected_;  // 客户端断开标记
     std::chrono::steady_clock::time_point last_activity_;
 };
 

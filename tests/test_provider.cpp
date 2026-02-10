@@ -198,6 +198,96 @@ void test_error_chunk() {
     std::cout << "PASSED" << std::endl;
 }
 
+// 测试 push 返回值
+void test_push_return_value() {
+    std::cout << "Test: push_return_value... " << std::flush;
+    
+    QueueProvider provider;
+    
+    // 正常 push 应该返回 true
+    assert(provider.push(OutputChunk::TextDelta("test", "gpt-4")) == true);
+    
+    // 结束后 push 应该返回 false
+    provider.end();
+    assert(provider.push(OutputChunk::TextDelta("after end", "gpt-4")) == false);
+    
+    std::cout << "PASSED" << std::endl;
+}
+
+// 测试超时后 push 失败
+void test_push_after_timeout() {
+    std::cout << "Test: push_after_timeout... " << std::flush;
+    
+    // 设置 100ms 超时
+    QueueProvider provider(std::chrono::milliseconds(100));
+    
+    // 第一次 push 成功
+    assert(provider.push(OutputChunk::TextDelta("first", "gpt-4")) == true);
+    
+    // 等待超时
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    
+    // 超时后 push 应该返回 false
+    assert(provider.push(OutputChunk::TextDelta("after timeout", "gpt-4")) == false);
+    
+    // is_writable 也应该返回 false
+    assert(provider.is_writable() == false);
+    
+    // is_alive 也应该返回 false
+    assert(provider.is_alive() == false);
+    
+    std::cout << "PASSED" << std::endl;
+}
+
+// 测试 is_writable 和 is_alive
+void test_writable_and_alive() {
+    std::cout << "Test: writable_and_alive... " << std::flush;
+    
+    QueueProvider provider;
+    
+    // 初始状态应该可写入
+    assert(provider.is_writable() == true);
+    assert(provider.is_alive() == true);
+    
+    // push 后仍然可写入
+    provider.push(OutputChunk::TextDelta("test", "gpt-4"));
+    assert(provider.is_writable() == true);
+    assert(provider.is_alive() == true);
+    
+    // 结束后不可写入
+    provider.end();
+    assert(provider.is_writable() == false);
+    assert(provider.is_alive() == false);
+    
+    std::cout << "PASSED" << std::endl;
+}
+
+// 测试断开连接
+void test_disconnect() {
+    std::cout << "Test: disconnect... " << std::flush;
+    
+    QueueProvider provider;
+    
+    // 初始状态正常
+    assert(provider.is_alive() == true);
+    assert(provider.is_writable() == true);
+    
+    // 模拟客户端断开
+    provider.disconnect();
+    
+    // 断开后不可写入
+    assert(provider.is_alive() == false);
+    assert(provider.is_writable() == false);
+    
+    // push 应该失败
+    assert(provider.push(OutputChunk::TextDelta("test", "gpt-4")) == false);
+    
+    // is_ended 也应该返回 true
+    assert(provider.is_ended() == true);
+    
+    std::cout << "PASSED" << std::endl;
+}
+
 int main() {
     std::cout << "=== DataProvider Tests ===" << std::endl;
     
@@ -209,6 +299,10 @@ int main() {
     test_wait_pop_for_timeout();
     test_empty_and_size();
     test_error_chunk();
+    test_push_return_value();
+    test_push_after_timeout();
+    test_writable_and_alive();
+    test_disconnect();
     
     std::cout << "\nAll tests PASSED!" << std::endl;
     return 0;
