@@ -322,29 +322,64 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
     
     // 处理响应
     if (request.stream) {
-        // 流式响应
-        std::stringstream sse_stream;
-        auto start = std::chrono::steady_clock::now();
-        
-        while (true) {
-            auto elapsed = std::chrono::steady_clock::now() - start;
-            auto remaining = options_.default_timeout - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
-            if (remaining <= std::chrono::milliseconds(0)) break;
-            
-            auto chunk = provider->wait_pop_for(remaining);
-            if (!chunk.has_value()) break;
-            if (chunk->is_end()) {
-                sse_stream << "data: [DONE]\n\n";
-                break;
-            }
-            
-            ChatCompletionsSSEEncoder encoder;
-            sse_stream << encoder.encode(chunk.value());
-        }
-        
+        // 流式响应 - 使用 ContentProvider 实现真正的流式输出
         res.set_header("Content-Type", "text/event-stream");
         res.set_header("Cache-Control", "no-cache");
-        res.set_content(sse_stream.str(), "text/event-stream");
+        res.set_header("Connection", "keep-alive");
+        
+        // 使用 shared_ptr 管理状态，确保生命周期
+        struct StreamState {
+            std::shared_ptr<BaseDataProvider> provider;
+            ChatCompletionsSSEEncoder encoder;
+            std::chrono::steady_clock::time_point start;
+            std::chrono::milliseconds timeout;
+            std::atomic<bool> done{false};
+        };
+        auto state = std::make_shared<StreamState>();
+        state->provider = provider;
+        state->start = std::chrono::steady_clock::now();
+        state->timeout = options_.default_timeout;
+        
+        // 使用 ContentProvider 流式写入
+        res.set_content_provider("text/event-stream", 
+            [state](size_t offset, httplib::DataSink& sink) -> bool {
+                if (state->done.load()) return false;  // 结束流
+                
+                auto elapsed = std::chrono::steady_clock::now() - state->start;
+                auto remaining = state->timeout - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+                if (remaining <= std::chrono::milliseconds(0)) {
+                    // 超时，发送 [DONE] 并结束
+                    const std::string done_marker = "data: [DONE]\n\n";
+                    sink.write(done_marker.data(), done_marker.size());
+                    state->done = true;
+                    return false;
+                }
+                
+                // 等待数据（最多 100ms，避免阻塞太久）
+                auto chunk = state->provider->wait_pop_for(std::chrono::milliseconds(100));
+                if (!chunk.has_value()) {
+                    // 没有数据，继续等待（返回 true 继续）
+                    return true;
+                }
+                
+                if (chunk->is_end()) {
+                    const std::string done_marker = "data: [DONE]\n\n";
+                    sink.write(done_marker.data(), done_marker.size());
+                    state->done = true;
+                    return false;  // 结束流
+                }
+                
+                // 编码并写入数据
+                std::string encoded = state->encoder.encode(chunk.value());
+                if (!encoded.empty()) {
+                    sink.write(encoded.data(), encoded.size());
+                }
+                
+                return true;  // 继续等待更多数据
+            }
+        );
+        
+        return;  // 重要：使用 ContentProvider 后不要调用 set_content
     } else {
         // 非流式响应
         auto chunk = provider->wait_pop_for(options_.default_timeout);
