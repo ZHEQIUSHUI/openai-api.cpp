@@ -322,7 +322,7 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
     
     // 处理响应
     if (request.stream) {
-        // 流式响应 - 使用 ContentProvider 实现真正的流式输出
+        // 流式响应 - 使用 chunked 传输实现真正的流式输出
         res.set_header("Content-Type", "text/event-stream");
         res.set_header("Cache-Control", "no-cache");
         res.set_header("Connection", "keep-alive");
@@ -340,33 +340,46 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         state->start = std::chrono::steady_clock::now();
         state->timeout = options_.default_timeout;
         
-        // 使用 ContentProvider 流式写入
-        res.set_content_provider("text/event-stream", 
+        // 使用 chunked content provider 支持流式传输
+        res.set_chunked_content_provider("text/event-stream",
             [state](size_t offset, httplib::DataSink& sink) -> bool {
-                if (state->done.load()) return false;  // 结束流
+                if (state->done.load()) {
+                    sink.done();  // 关闭连接
+                    return false;
+                }
                 
                 auto elapsed = std::chrono::steady_clock::now() - state->start;
                 auto remaining = state->timeout - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
                 if (remaining <= std::chrono::milliseconds(0)) {
-                    // 超时，发送 [DONE] 并结束
+                    // 超时，发送 [DONE] 并关闭
                     const std::string done_marker = "data: [DONE]\n\n";
                     sink.write(done_marker.data(), done_marker.size());
+                    sink.done();  // 关键：关闭连接
                     state->done = true;
                     return false;
                 }
                 
-                // 等待数据（最多 100ms，避免阻塞太久）
-                auto chunk = state->provider->wait_pop_for(std::chrono::milliseconds(100));
+                // 检查 provider 是否已结束（减少等待时间）
+                if (state->provider->is_ended()) {
+                    const std::string done_marker = "data: [DONE]\n\n";
+                    sink.write(done_marker.data(), done_marker.size());
+                    sink.done();  // 关闭连接
+                    state->done = true;
+                    return false;
+                }
+                
+                // 等待数据（短超时，快速响应结束）
+                auto chunk = state->provider->wait_pop_for(std::chrono::milliseconds(10));
                 if (!chunk.has_value()) {
-                    // 没有数据，继续等待（返回 true 继续）
-                    return true;
+                    return true;  // 没有数据，继续等待
                 }
                 
                 if (chunk->is_end()) {
                     const std::string done_marker = "data: [DONE]\n\n";
                     sink.write(done_marker.data(), done_marker.size());
+                    sink.done();  // 关键：关闭连接让 Python SDK 知道结束
                     state->done = true;
-                    return false;  // 结束流
+                    return false;
                 }
                 
                 // 编码并写入数据
@@ -375,11 +388,11 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
                     sink.write(encoded.data(), encoded.size());
                 }
                 
-                return true;  // 继续等待更多数据
+                return true;  // 继续等待
             }
         );
         
-        return;  // 重要：使用 ContentProvider 后不要调用 set_content
+        return;
     } else {
         // 非流式响应
         auto chunk = provider->wait_pop_for(options_.default_timeout);
