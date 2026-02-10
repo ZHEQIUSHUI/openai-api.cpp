@@ -7,38 +7,11 @@
 
 namespace openai_api {
 
-// ============ 基础类型 ============
-
-struct Message {
-    std::string role;      // "system", "user", "assistant", "tool"
-    std::string content;   // 文本内容或多模态内容
-    // TODO: 支持多模态内容 (image_url 等)
-    
-    nlohmann::json to_json() const {
-        nlohmann::json j;
-        j["role"] = role;
-        j["content"] = content;
-        return j;
-    }
-    
-    static Message from_json(const nlohmann::json& j) {
-        Message msg;
-        if (j.contains("role")) msg.role = j["role"].get<std::string>();
-        if (j.contains("content")) {
-            if (j["content"].is_string()) {
-                msg.content = j["content"].get<std::string>();
-            }
-            // TODO: 处理数组类型的 content（多模态）
-        }
-        return msg;
-    }
-};
-
 // ============ 请求类型 ============
 
 struct ChatRequest {
     std::string model;
-    std::vector<Message> messages;
+    nlohmann::json messages;
     bool stream = false;
     float temperature = 1.0f;
     float top_p = 1.0f;
@@ -65,9 +38,7 @@ struct ChatRequest {
         if (j.contains("frequency_penalty")) req.frequency_penalty = j["frequency_penalty"].get<float>();
         
         if (j.contains("messages") && j["messages"].is_array()) {
-            for (const auto& msg_j : j["messages"]) {
-                req.messages.push_back(Message::from_json(msg_j));
-            }
+            req.messages = j["messages"];
         }
         
         if (j.contains("stop")) {
