@@ -1,0 +1,270 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  # Linux 构建和测试
+  linux-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Release, Debug]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build ${{ matrix.compiler == 'gcc' && 'g++' || 'clang' }}
+    
+    - name: Configure CMake
+      run: |
+        export CC=${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+        export CXX=${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DOPENAI_API_BUILD_TESTS=ON \
+          -DOPENAI_API_BUILD_EXAMPLES=ON
+    
+    - name: Build
+      run: cmake --build build --config ${{ matrix.build_type }} -j$(nproc)
+    
+    - name: Test
+      working-directory: build
+      run: ctest --output-on-failure -C ${{ matrix.build_type }} --timeout 300
+    
+    - name: Upload artifacts
+      if: matrix.build_type == 'Release' && matrix.compiler == 'gcc'
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-${{ matrix.compiler }}-binaries
+        path: |
+          build/openai_api_server
+          build/examples/*/openai_api_example_*
+        retention-days: 7
+
+  # macOS 构建和测试
+  macos-build:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        build_type: [Release]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: brew install cmake ninja
+    
+    - name: Configure CMake
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DOPENAI_API_BUILD_TESTS=ON \
+          -DOPENAI_API_BUILD_EXAMPLES=ON
+    
+    - name: Build
+      run: cmake --build build --config ${{ matrix.build_type }} -j$(sysctl -n hw.ncpu)
+    
+    - name: Test
+      working-directory: build
+      run: ctest --output-on-failure -C ${{ matrix.build_type }} --timeout 300
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: macos-binaries
+        path: |
+          build/openai_api_server
+          build/examples/*/openai_api_example_*
+        retention-days: 7
+
+  # Windows 构建和测试
+  windows-build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        build_type: [Release]
+        arch: [x64]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.arch }}
+    
+    - name: Configure CMake
+      run: |
+        cmake -B build -A ${{ matrix.arch }} `
+          -DOPENAI_API_BUILD_TESTS=ON `
+          -DOPENAI_API_BUILD_EXAMPLES=ON
+    
+    - name: Build
+      run: cmake --build build --config ${{ matrix.build_type }} --parallel
+    
+    - name: Test
+      working-directory: build
+      run: ctest --output-on-failure -C ${{ matrix.build_type }} --timeout 300
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-${{ matrix.arch }}-binaries
+        path: |
+          build/${{ matrix.build_type }}/openai_api_server.exe
+          build/examples/**/Release/openai_api_example_*.exe
+        retention-days: 7
+
+  # 代码格式检查
+  format-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install clang-format
+      run: sudo apt-get update && sudo apt-get install -y clang-format
+    
+    - name: Check formatting
+      run: |
+        find src include examples -name "*.cpp" -o -name "*.hpp" -o -name "*.h" | \
+          xargs clang-format --dry-run --Werror
+      continue-on-error: true  # 暂时不阻断构建
+
+  # 代码覆盖率
+  coverage:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++ lcov
+    
+    - name: Configure CMake with coverage
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_FLAGS="--coverage" \
+          -DOPENAI_API_BUILD_TESTS=ON \
+          -DOPENAI_API_BUILD_EXAMPLES=OFF
+    
+    - name: Build
+      run: cmake --build build -j$(nproc)
+    
+    - name: Test with coverage
+      working-directory: build
+      run: |
+        ctest --output-on-failure --timeout 300
+        lcov --capture --directory . --output-file coverage.info
+        lcov --remove coverage.info '/usr/*' '*/tests/*' '*/examples/*' --output-file coverage.info
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: build/coverage.info
+        fail_ci_if_error: false
+        verbose: true
+
+  # 静态分析
+  static-analysis:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++ cppcheck
+    
+    - name: Run cppcheck
+      run: |
+        cppcheck --enable=all --error-exitcode=0 \
+          --suppress=missingIncludeSystem \
+          --inline-suppr \
+          -I include \
+          src 2>&1 | tee cppcheck-report.txt
+    
+    - name: Upload cppcheck report
+      uses: actions/upload-artifact@v4
+      with:
+        name: cppcheck-report
+        path: cppcheck-report.txt
+        retention-days: 7
+
+  # 发布 Release
+  release:
+    needs: [linux-build, macos-build, windows-build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Create Release Archives
+      run: |
+        mkdir -p release
+        
+        # Linux
+        tar -czf release/openai-api-linux.tar.gz \
+          -C artifacts/linux-gcc-binaries .
+        
+        # macOS
+        tar -czf release/openai-api-macos.tar.gz \
+          -C artifacts/macos-binaries .
+        
+        # Windows
+        cd artifacts/windows-x64-binaries && \
+          zip -r ../../release/openai-api-windows.zip . && \
+          cd ../..
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release/*
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Docker 构建
+  docker-build:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      run: |
+        docker build -t openai-api:test .
+    
+    - name: Test Docker image
+      run: |
+        docker run --rm -d -p 8080:8080 --name test-server openai-api:test
+        sleep 5
+        curl -f http://localhost:8080/v1/models || exit 1
+        docker stop test-server
+      continue-on-error: true
