@@ -1,5 +1,7 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
+
 /**
  * OpenAI API Compatible Server Library
  * 
@@ -66,7 +68,7 @@ struct ServerOptions {
 /**
  * OpenAI API 兼容服务器
  */
-class Server {
+class OPENAI_API_API Server {
 public:
     Server();
     

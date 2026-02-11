@@ -1,5 +1,6 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
 #include "output_chunk.hpp"
 
 #include <queue>
@@ -23,7 +24,7 @@ namespace openai_api {
  * 4. 阻塞/非阻塞读取
  * 5. 可写入状态判断
  */
-class BaseDataProvider {
+class OPENAI_API_API BaseDataProvider {
 public:
     virtual ~BaseDataProvider() = default;
     
@@ -87,7 +88,7 @@ public:
  * 4. 支持阻塞/非阻塞读取
  * 5. 可写入状态判断
  */
-class QueueProvider : public BaseDataProvider {
+class OPENAI_API_API QueueProvider : public BaseDataProvider {
 public:
     explicit QueueProvider(std::chrono::milliseconds timeout = std::chrono::milliseconds(60000))
         : timeout_(timeout)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
 #include "../core/data_provider.hpp"
 #include "internal_protocol.hpp"
 
@@ -19,7 +20,7 @@ class WorkerManager;
  * 当 Master 收到请求需要转发给 Worker 时，使用此 Provider
  * 它会将数据转发给 Worker，并将 Worker 的响应返回给 Server
  */
-class RemoteWorkerProvider : public BaseDataProvider {
+class OPENAI_API_API RemoteWorkerProvider : public BaseDataProvider {
 public:
     RemoteWorkerProvider(const std::string& request_id,
                          WorkerManager* manager,

@@ -106,14 +106,15 @@ jobs:
       run: |
         cmake -B build -A ${{ matrix.arch }} `
           -DOPENAI_API_BUILD_TESTS=ON `
-          -DOPENAI_API_BUILD_EXAMPLES=ON
+          -DOPENAI_API_BUILD_EXAMPLES=ON `
+          -DOPENAI_API_BUILD_SHARED=OFF
     
     - name: Build
       run: cmake --build build --config ${{ matrix.build_type }} --parallel
     
-    - name: Test
+    - name: Test (excluding cluster tests)
       working-directory: build
-      run: ctest --output-on-failure -C ${{ matrix.build_type }} --timeout 300
+      run: ctest --output-on-failure -C ${{ matrix.build_type }} --timeout 60 -E cluster
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4

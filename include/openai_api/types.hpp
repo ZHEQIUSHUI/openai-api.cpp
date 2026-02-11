@@ -1,5 +1,6 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
 #include "utils/json.hpp"
 #include <string>
 #include <vector>

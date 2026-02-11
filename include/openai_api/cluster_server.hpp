@@ -1,5 +1,7 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
+
 /**
  * OpenAI API Cluster Server
  * 
@@ -63,7 +65,7 @@ struct ClusterServerOptions {
  * - 端口被占用且为本项目服务：以 Worker 模式连接
  * - 端口被占用但不是本项目服务：报错
  */
-class ClusterServer {
+class OPENAI_API_API ClusterServer {
 public:
     ClusterServer();
     explicit ClusterServer(int port);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
 #include "types.hpp"
 #include "openai_api/core/data_provider.hpp"
 #include <functional>
@@ -22,7 +23,7 @@ using ImageGenCallback = std::function<void(const ImageGenRequest&, std::shared_
  * 管理不同类型（Chat/ASR/TTS等）的多个模型实现
  * 根据请求中的 model 字段路由到对应的回调函数
  */
-class ModelRouter {
+class OPENAI_API_API ModelRouter {
 public:
     ModelRouter() = default;
     ~ModelRouter() = default;

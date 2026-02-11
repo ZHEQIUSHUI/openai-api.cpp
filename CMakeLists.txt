@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 选项（使用项目前缀避免与其他项目冲突）
 option(OPENAI_API_BUILD_EXAMPLES "Build openai-api.cpp examples" ON)
 option(OPENAI_API_BUILD_TESTS "Build openai-api.cpp tests" ON)
+option(OPENAI_API_BUILD_SHARED "Build openai-api.cpp as shared library" OFF)
 
 # 包含目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -15,14 +16,34 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 find_package(Threads REQUIRED)
 
 # ============ 核心库 ============
-add_library(openai_api STATIC
-    src/server.cpp
-    src/router.cpp
-    src/cluster/remote_worker_provider.cpp
-    src/cluster/worker_manager.cpp
-    src/cluster/worker_client.cpp
-    src/cluster_server.cpp
-)
+if(OPENAI_API_BUILD_SHARED)
+    add_library(openai_api SHARED
+        src/server.cpp
+        src/router.cpp
+        src/cluster/remote_worker_provider.cpp
+        src/cluster/worker_manager.cpp
+        src/cluster/worker_client.cpp
+        src/cluster_server.cpp
+    )
+    # 定义导出宏（构建 DLL 时使用 dllexport）
+    target_compile_definitions(openai_api PRIVATE OPENAI_API_EXPORTS)
+    
+    # Windows 上需要导出所有符号
+    if(WIN32)
+        set_target_properties(openai_api PROPERTIES
+            WINDOWS_EXPORT_ALL_SYMBOLS ON
+        )
+    endif()
+else()
+    add_library(openai_api STATIC
+        src/server.cpp
+        src/router.cpp
+        src/cluster/remote_worker_provider.cpp
+        src/cluster/worker_manager.cpp
+        src/cluster/worker_client.cpp
+        src/cluster_server.cpp
+    )
+endif()
 
 target_include_directories(openai_api PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

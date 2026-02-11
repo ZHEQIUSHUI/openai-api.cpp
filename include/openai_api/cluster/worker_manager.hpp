@@ -1,5 +1,6 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
 #include "internal_protocol.hpp"
 #include "../core/data_provider.hpp"
 #include "../types.hpp"
@@ -68,7 +69,7 @@ struct RemoteRequestContext {
  * 3. 转发请求到 Worker
  * 4. 维护心跳
  */
-class WorkerManager {
+class OPENAI_API_API WorkerManager {
 public:
     // 模型注册回调
     using ModelRegisteredCallback = std::function<void(const std::string& model_name, ModelType type)>;

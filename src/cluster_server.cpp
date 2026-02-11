@@ -1,8 +1,14 @@
 #include "openai_api/cluster_server.hpp"
 #include <iostream>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#endif
 
 namespace openai_api {
 
@@ -491,20 +497,22 @@ bool ClusterServer::isRunning() const {
     return running_.load();
 }
 
-void ClusterServer::registerLocalModelsToMaster() {
-    if (!worker_client_ || !worker_client_->is_connected()) {
-        return;
-    }
-    
-    std::lock_guard<std::mutex> lock(models_mutex_);
-    for (const auto& model : local_models_) {
-        worker_client_->register_model(model.type, model.name);
-    }
-    local_models_.clear();
-}
-
 bool ClusterServer::tryStartMaster(int port) {
     // 检查端口是否可用
+#ifdef _WIN32
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) {
+        return false;
+    }
+    
+    sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+    
+    bool available = (bind(sock, (sockaddr*)&addr, sizeof(addr)) == 0);
+    closesocket(sock);
+#else
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return false;
     
@@ -515,6 +523,7 @@ bool ClusterServer::tryStartMaster(int port) {
     
     bool available = (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0);
     close(sock);
+#endif
     
     if (!available) {
         return false;  // 端口被占用
@@ -557,6 +566,18 @@ void ClusterServer::setupWorkerHandler() {
     // 设置 Worker 请求处理器
     // 这个方法在 Worker 模式下用于处理 Master 转发的请求
     // 实际处理逻辑已经在 runAsWorker 中通过 Router 设置
+}
+
+void ClusterServer::registerLocalModelsToMaster() {
+    if (!worker_client_ || !worker_client_->is_connected()) {
+        return;
+    }
+    
+    std::lock_guard<std::mutex> lock(models_mutex_);
+    for (const auto& model : local_models_) {
+        worker_client_->register_model(model.type, model.name);
+    }
+    local_models_.clear();
 }
 
 } // namespace openai_api

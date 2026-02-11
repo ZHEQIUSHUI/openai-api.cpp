@@ -3,18 +3,65 @@
 #include <sstream>
 #include <iomanip>
 #include <random>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iphlpapi.lib")
+#else
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 
 namespace openai_api {
 namespace cluster {
 
 // 获取本机非回环 IP 地址
 static std::string get_local_ip() {
+    std::string result = "127.0.0.1";  // 默认回退
+    
+#ifdef _WIN32
+    // Windows 实现
+    ULONG flags = GAA_FLAG_INCLUDE_PREFIX;
+    ULONG family = AF_INET;  // IPv4
+    ULONG bufferSize = 15000;
+    
+    std::vector<BYTE> buffer(bufferSize);
+    PIP_ADAPTER_ADDRESSES adapterAddresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
+    
+    DWORD ret = GetAdaptersAddresses(family, flags, nullptr, adapterAddresses, &bufferSize);
+    if (ret != ERROR_SUCCESS) {
+        return result;
+    }
+    
+    for (PIP_ADAPTER_ADDRESSES adapter = adapterAddresses; adapter != nullptr; adapter = adapter->Next) {
+        // 跳过回环和未启用的适配器
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK || adapter->OperStatus != IfOperStatusUp) {
+            continue;
+        }
+        
+        for (PIP_ADAPTER_UNICAST_ADDRESS unicast = adapter->FirstUnicastAddress; 
+             unicast != nullptr; unicast = unicast->Next) {
+            sockaddr* addr = unicast->Address.lpSockaddr;
+            if (addr->sa_family == AF_INET) {
+                char ipStr[INET_ADDRSTRLEN];
+                sockaddr_in* sin = reinterpret_cast<sockaddr_in*>(addr);
+                inet_ntop(AF_INET, &(sin->sin_addr), ipStr, INET_ADDRSTRLEN);
+                
+                std::string ip(ipStr);
+                if (ip != "127.0.0.1") {
+                    return ip;
+                }
+            }
+        }
+    }
+#else
+    // Linux/macOS 实现
     struct ifaddrs *ifaddr, *ifa;
     char addrstr[INET_ADDRSTRLEN];
-    std::string result = "127.0.0.1";  // 默认回退
     
     if (getifaddrs(&ifaddr) == -1) {
         return result;
@@ -36,6 +83,8 @@ static std::string get_local_ip() {
     }
     
     freeifaddrs(ifaddr);
+#endif
+    
     return result;
 }
 

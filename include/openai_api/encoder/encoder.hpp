@@ -1,5 +1,6 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
 #include "openai_api/core/output_chunk.hpp"
 #include "openai_api/core/data_provider.hpp"
 
@@ -14,7 +15,7 @@ namespace openai_api {
  * Encoder 基类
  * 负责将 OutputChunk 编码为具体的协议格式
  */
-class Encoder {
+class OPENAI_API_API Encoder {
 public:
     virtual ~Encoder() = default;
     

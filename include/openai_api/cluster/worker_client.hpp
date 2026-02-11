@@ -1,5 +1,6 @@
 #pragma once
 
+#include "openai_api/core/api_export.hpp"
 #include "internal_protocol.hpp"
 #include "../core/data_provider.hpp"
 #include "../router.hpp"
@@ -25,7 +26,7 @@ namespace cluster {
  * 3. 接收并处理转发请求
  * 4. 发送心跳
  */
-class WorkerClient {
+class OPENAI_API_API WorkerClient {
 public:
     using RequestHandler = std::function<void(ModelType type,
                                                const nlohmann::json& request,
@@ -108,9 +109,12 @@ private:
 };
 
 /**
- * 检查端口是否被占用，如果是本项目服务则返回 true
+ * 检查是否为集群服务
+ * @param host 主机地址
+ * @param port 端口号
+ * @return true 是集群服务，false 不是或连接失败
  */
-bool check_is_cluster_server(const std::string& host, int port);
+OPENAI_API_API bool check_is_cluster_server(const std::string& host, int port);
 
 } // namespace cluster
 } // namespace openai_api
