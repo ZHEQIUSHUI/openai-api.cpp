@@ -6,6 +6,7 @@
 
 - **库形式**：作为 CMake 库供其他项目引入
 - **多模型路由**：同一端点支持多个算法实现（如 ASR 同时支持 Whisper 和 SenseVoice）
+- **集群模式**：支持 Master-Worker 架构，多个 Worker 进程可以注册到同一个 Master
 - **模型验证**：自动验证请求的模型是否已注册
 - **完整 API 支持**：Chat、Embedding、ASR、TTS、Image Generation
 - **流式输出**：支持 SSE 流式响应
@@ -243,6 +244,96 @@ sensevoice? ──→ SenseVoice 回调
     "type": "invalid_request_error"
   }
 }
+```
+
+## 集群模式 (Cluster Mode)
+
+支持 Master-Worker 分布式架构，多个 Worker 进程可以连接到同一个 Master，实现模型服务的水平扩展。
+
+### 架构
+
+```
+┌─────────────┐      HTTP API      ┌─────────────┐
+│   Client    │ ◄────────────────► │    Master   │◄────┐
+└─────────────┘                    │   (Port N)  │     │
+                                   └──────┬──────┘     │
+                                          │            │
+                    ┌─────────────────────┼────────┐   │
+                    │                     │        │   │
+                    ▼                     ▼        ▼   │
+              ┌─────────┐          ┌─────────┐ ┌──────┴───┐
+              │ Worker1 │          │ Worker2 │ │ Worker3  │
+              │(Model A)│          │(Model B)│ │(Model C) │
+              └─────────┘          └─────────┘ └──────────┘
+              (Port N+1000 内部通信)
+```
+
+### 使用示例
+
+**Master 进程（第一个启动）：**
+
+```cpp
+#include <openai_api/cluster_server.hpp>
+
+int main() {
+    openai_api::ClusterServer master;
+    
+    // Master 也可以有自己的本地模型
+    master.registerChat("master-model", [](const auto& req, auto provider) {
+        // 处理请求
+    });
+    
+    // 启动 Master，监听 8080 端口
+    // 内部 Worker 管理端口为 8080 + 1000 = 9080
+    master.runAsMaster(8080);
+}
+```
+
+**Worker 进程（后续启动）：**
+
+```cpp
+#include <openai_api/cluster_server.hpp>
+
+int main() {
+    openai_api::ClusterServer worker;
+    
+    // Worker 设置自己的监听地址（用于跨机器部署）
+    worker.setWorkerListenAddress("0.0.0.0", 0);  // 0 表示自动分配端口
+    
+    // 注册 Worker 的模型
+    worker.registerChat("worker-model", [](const auto& req, auto provider) {
+        // 处理请求
+    });
+    
+    // 连接到 Master 的内部端口 (8080 + 1000)
+    worker.runAsWorker("192.168.1.100", 9080);
+}
+```
+
+### 特性
+
+- **自动端口检测**：Worker 自动计算 Master 的内部端口（外部端口 + 1000）
+- **模型冲突检测**：同名模型注册会失败，避免冲突
+- **请求转发**：Master 自动将请求转发到对应的 Worker
+- **心跳保活**：Worker 定期发送心跳，Master 自动检测断线
+- **跨机器部署**：Worker 可以运行在不同的机器上，只需网络可达
+
+### 运行示例
+
+```bash
+# 终端 1：启动 Master
+./openai_api_example_cluster_master 8080
+
+# 终端 2：启动 Worker 1（连接 Master）
+./openai_api_example_cluster_worker -n worker-1 192.168.1.100 8080
+
+# 终端 3：启动 Worker 2（连接 Master）
+./openai_api_example_cluster_worker -n worker-2 192.168.1.100 8080
+
+# 测试 - 请求会转发到对应的 Worker
+curl http://192.168.1.100:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "worker-1-model", "messages": [...]}'
 ```
 
 ## 目录结构

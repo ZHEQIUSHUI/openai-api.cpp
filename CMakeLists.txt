@@ -18,6 +18,10 @@ find_package(Threads REQUIRED)
 add_library(openai_api STATIC
     src/server.cpp
     src/router.cpp
+    src/cluster/remote_worker_provider.cpp
+    src/cluster/worker_manager.cpp
+    src/cluster/worker_client.cpp
+    src/cluster_server.cpp
 )
 
 target_include_directories(openai_api PUBLIC
@@ -51,6 +55,14 @@ if(OPENAI_API_BUILD_TESTS)
     add_executable(openai_api_test_integration tests/test_integration.cpp)
     target_link_libraries(openai_api_test_integration PRIVATE openai_api)
     add_test(NAME openai_api_integration_test COMMAND openai_api_test_integration)
+    
+    add_executable(openai_api_test_cluster tests/test_cluster.cpp)
+    target_link_libraries(openai_api_test_cluster PRIVATE openai_api)
+    add_test(NAME openai_api_cluster_test COMMAND openai_api_test_cluster)
+    
+    add_executable(openai_api_test_cluster_full tests/test_cluster_full.cpp)
+    target_link_libraries(openai_api_test_cluster_full PRIVATE openai_api)
+    add_test(NAME openai_api_cluster_full_test COMMAND openai_api_test_cluster_full)
 endif()
 
 # ============ 示例 ============
