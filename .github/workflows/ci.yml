@@ -42,7 +42,7 @@ jobs:
     
     - name: Upload artifacts
       if: matrix.build_type == 'Release' && matrix.compiler == 'gcc'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: linux-${{ matrix.compiler }}-binaries
         path: |
@@ -78,7 +78,7 @@ jobs:
       run: ctest --output-on-failure -C ${{ matrix.build_type }} --timeout 300
     
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: macos-binaries
         path: |
@@ -117,7 +117,7 @@ jobs:
       run: ctest --output-on-failure -C ${{ matrix.build_type }} --timeout 60 -E cluster
     
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: windows-${{ matrix.arch }}-binaries
         path: |
@@ -200,7 +200,7 @@ jobs:
           src 2>&1 | tee cppcheck-report.txt
     
     - name: Upload cppcheck report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: cppcheck-report
         path: cppcheck-report.txt
