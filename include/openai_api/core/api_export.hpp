@@ -12,14 +12,19 @@
 
 // 定义导出宏
 #if defined(_WIN32) || defined(__CYGWIN__)
-    #ifdef OPENAI_API_EXPORTS
-        // 编译库时使用 dllexport
+    #ifdef OPENAI_API_STATIC
+        // 静态库，不需要导出/导入
+        #define OPENAI_API_API
+        #define OPENAI_API_LOCAL
+    #elif defined(OPENAI_API_EXPORTS)
+        // 编译动态库时使用 dllexport
         #define OPENAI_API_API __declspec(dllexport)
+        #define OPENAI_API_LOCAL
     #else
-        // 使用库时使用 dllimport
+        // 使用动态库时使用 dllimport
         #define OPENAI_API_API __declspec(dllimport)
+        #define OPENAI_API_LOCAL
     #endif
-    #define OPENAI_API_LOCAL
 #else
     // GCC/Clang 使用可见性属性
     #if __GNUC__ >= 4

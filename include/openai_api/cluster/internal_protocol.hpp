@@ -38,7 +38,7 @@ enum class MessageType : uint32_t {
     FORWARD_RESPONSE,
     
     // 错误
-    ERROR,
+    MSG_ERROR,
     
     // 断开连接
     DISCONNECT
@@ -61,7 +61,7 @@ struct MessageHeader {
     uint32_t payload_length;  // 负载长度
     
     bool is_valid() const {
-        return magic == CLUSTER_MAGIC && version == PROTOCOL_VERSION;
+        return magic == cluster::CLUSTER_MAGIC && version == cluster::PROTOCOL_VERSION;
     }
 };
 

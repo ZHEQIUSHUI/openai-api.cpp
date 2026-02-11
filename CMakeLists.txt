@@ -43,6 +43,8 @@ else()
         src/cluster/worker_client.cpp
         src/cluster_server.cpp
     )
+    # 静态库需要定义 OPENAI_API_STATIC
+    target_compile_definitions(openai_api PUBLIC OPENAI_API_STATIC)
 endif()
 
 target_include_directories(openai_api PUBLIC
@@ -53,6 +55,11 @@ target_include_directories(openai_api PUBLIC
 target_link_libraries(openai_api PUBLIC
     Threads::Threads
 )
+
+# Windows 需要链接 ws2_32 (Winsock2) 和 iphlpapi (IP Helper API)
+if(WIN32)
+    target_link_libraries(openai_api PUBLIC ws2_32 iphlpapi)
+endif()
 
 # 别名目标（方便 FetchContent 使用）
 add_library(openai_api::server ALIAS openai_api)
