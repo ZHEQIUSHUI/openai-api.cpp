@@ -120,7 +120,7 @@ void test_thread_safety() {
     QueueProvider provider;
     const int num_items = 1000;
     
-    std::thread producer([&provider]() {
+    std::thread producer([&provider, num_items]() {
         for (int i = 0; i < num_items; ++i) {
             provider.push(OutputChunk::TextDelta(std::to_string(i), "gpt-4"));
         }
