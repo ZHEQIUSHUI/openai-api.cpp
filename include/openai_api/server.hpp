@@ -63,6 +63,8 @@ struct ServerOptions {
     std::chrono::milliseconds default_timeout{60000};
     std::chrono::milliseconds wait_timeout{5000};
     std::string api_key;  // 空表示不启用认证
+    std::string worker_id;  // Worker ID（集群模式下使用，留空自动生成）
+    std::string owner = "openai-api";  // 模型列表中显示的拥有者名称
 };
 
 /**
@@ -94,6 +96,11 @@ public:
      * 设置 API key（启用认证）
      */
     void setApiKey(const std::string& api_key);
+    
+    /**
+     * 设置模型拥有者名称（显示在 /v1/models 中）
+     */
+    void setOwner(const std::string& owner);
     
     // ============ 模型注册 ============
     

@@ -52,9 +52,13 @@ struct ClusterServerOptions {
     
     // 集群相关配置
     bool enable_cluster = true;              // 启用集群功能
-    std::string worker_id;                    // Worker ID（留空自动生成）
+    // worker_id 已移至 ServerOptions（server.worker_id）
     std::chrono::milliseconds worker_timeout{30000};  // Worker 超时时间
     std::chrono::milliseconds heartbeat_interval{5000}; // 心跳间隔
+    
+    // 兼容访问（转发到 server.worker_id）
+    std::string& worker_id() { return server.worker_id; }
+    const std::string& worker_id() const { return server.worker_id; }
 };
 
 /**

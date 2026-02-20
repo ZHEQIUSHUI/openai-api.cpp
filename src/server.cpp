@@ -33,6 +33,10 @@ void Server::setApiKey(const std::string& api_key) {
     options_.api_key = api_key;
 }
 
+void Server::setOwner(const std::string& owner) {
+    options_.owner = owner;
+}
+
 // ============ 模型注册 ============
 
 void Server::registerChat(const std::string& model_name, ChatCallback callback) {
@@ -256,7 +260,7 @@ void Server::handleModels(const httplib::Request& req, httplib::Response& res) {
         model_j["id"] = model_name;
         model_j["object"] = "model";
         model_j["created"] = now;
-        model_j["owned_by"] = "openai-api";
+        model_j["owned_by"] = options_.owner;
         j["data"].push_back(model_j);
     }
     

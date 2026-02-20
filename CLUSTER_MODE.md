@@ -116,12 +116,20 @@ WorkerClient* getWorkerClient();
 ### 配置选项
 
 ```cpp
+struct ServerOptions {
+    std::string host = "0.0.0.0";
+    int port = 8080;
+    int max_concurrency = 10;
+    std::chrono::milliseconds default_timeout{60000};
+    std::string api_key;
+    std::string worker_id;  // Worker ID（集群模式下使用，留空自动生成）
+};
+
 struct ClusterServerOptions {
-    ServerOptions server;                           // 基础服务器配置
-    bool enable_cluster = true;                     // 启用集群功能
-    std::string worker_id;                          // Worker ID（留空自动生成）
-    std::chrono::milliseconds worker_timeout{30000};       // Worker 超时时间
-    std::chrono::milliseconds heartbeat_interval{5000};    // 心跳间隔
+    ServerOptions server;
+    bool enable_cluster = true;
+    std::chrono::milliseconds worker_timeout{30000};
+    std::chrono::milliseconds heartbeat_interval{5000};
 };
 ```
 
