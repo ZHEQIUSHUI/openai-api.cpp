@@ -3,6 +3,7 @@
 #include <sstream>
 #include <iomanip>
 #include <random>
+#include <cctype>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -18,6 +19,46 @@
 
 namespace openai_api {
 namespace cluster {
+
+namespace {
+
+std::string base64_encode(const std::vector<uint8_t>& data) {
+    static const char* kChars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    encoded.reserve(((data.size() + 2) / 3) * 4);
+
+    size_t i = 0;
+    while (i + 2 < data.size()) {
+        const uint32_t n = (static_cast<uint32_t>(data[i]) << 16) |
+                           (static_cast<uint32_t>(data[i + 1]) << 8) |
+                           static_cast<uint32_t>(data[i + 2]);
+        encoded.push_back(kChars[(n >> 18) & 0x3F]);
+        encoded.push_back(kChars[(n >> 12) & 0x3F]);
+        encoded.push_back(kChars[(n >> 6) & 0x3F]);
+        encoded.push_back(kChars[n & 0x3F]);
+        i += 3;
+    }
+
+    const size_t rem = data.size() - i;
+    if (rem == 1) {
+        const uint32_t n = static_cast<uint32_t>(data[i]) << 16;
+        encoded.push_back(kChars[(n >> 18) & 0x3F]);
+        encoded.push_back(kChars[(n >> 12) & 0x3F]);
+        encoded.push_back('=');
+        encoded.push_back('=');
+    } else if (rem == 2) {
+        const uint32_t n = (static_cast<uint32_t>(data[i]) << 16) |
+                           (static_cast<uint32_t>(data[i + 1]) << 8);
+        encoded.push_back(kChars[(n >> 18) & 0x3F]);
+        encoded.push_back(kChars[(n >> 12) & 0x3F]);
+        encoded.push_back(kChars[(n >> 6) & 0x3F]);
+        encoded.push_back('=');
+    }
+    return encoded;
+}
+
+}  // namespace
 
 // 获取本机非回环 IP 地址
 static std::string get_local_ip() {
@@ -193,6 +234,7 @@ bool WorkerClient::connect(const std::string& host, int port) {
     
     connected_ = true;
     should_stop_ = false;
+    actual_listen_port_ = 0;
     
     // 启动处理线程（启动本地 HTTP 服务接收 Master 转发）
     process_thread_ = std::thread([this]() {
@@ -203,8 +245,13 @@ bool WorkerClient::connect(const std::string& host, int port) {
     while (actual_listen_port_.load() == 0 && !should_stop_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    
-    if (should_stop_) {
+
+    if (actual_listen_port_.load() <= 0 || should_stop_) {
+        should_stop_ = true;
+        connected_ = false;
+        if (process_thread_.joinable()) {
+            process_thread_.join();
+        }
         client_.reset();
         return false;
     }
@@ -237,7 +284,8 @@ void WorkerClient::disconnect() {
     if (heartbeat_thread_.joinable()) {
         heartbeat_thread_.join();
     }
-    
+
+    actual_listen_port_ = 0;
     client_.reset();
 }
 
@@ -350,6 +398,8 @@ void WorkerClient::process_loop() {
     int port = listen_port_;
     if (port > 0) {
         if (!server.bind_to_port(listen_host_, port)) {
+            actual_listen_port_ = -1;
+            should_stop_ = true;
             return;  // 端口绑定失败
         }
         actual_listen_port_ = port;
@@ -365,6 +415,8 @@ void WorkerClient::process_loop() {
     }
     
     if (port == 0) {
+        actual_listen_port_ = -1;
+        should_stop_ = true;
         return;  // 绑定失败
     }
     
@@ -399,33 +451,50 @@ void WorkerClient::handle_forward_request(const nlohmann::json& data) {
     
     // 使用 Router 处理请求
     if (router_) {
+        bool routed = false;
         switch (type) {
             case ModelType::CHAT: {
                 ChatRequest chat_req = ChatRequest::from_json(request);
-                router_->routeChat(chat_req, provider);
+                routed = router_->routeChat(chat_req, provider);
                 break;
             }
             case ModelType::EMBEDDING: {
                 EmbeddingRequest emb_req = EmbeddingRequest::from_json(request);
-                router_->routeEmbedding(emb_req, provider);
+                routed = router_->routeEmbedding(emb_req, provider);
                 break;
             }
             case ModelType::TTS: {
                 TTSRequest tts_req = TTSRequest::from_json(request);
-                router_->routeTTS(tts_req, provider);
+                routed = router_->routeTTS(tts_req, provider);
+                break;
+            }
+            case ModelType::ASR: {
+                ASRRequest asr_req;
+                asr_req.model = request.value("model", "");
+                asr_req.language = request.value("language", "");
+                asr_req.prompt = request.value("prompt", "");
+                asr_req.response_format = request.value("response_format", "json");
+                asr_req.temperature = request.value("temperature", 0.0f);
+                routed = router_->routeASR(asr_req, provider);
                 break;
             }
             case ModelType::IMAGE_GEN: {
                 ImageGenRequest img_req = ImageGenRequest::from_json(request);
-                router_->routeImageGeneration(img_req, provider);
+                routed = router_->routeImageGeneration(img_req, provider);
                 break;
             }
             default:
-                // ASR 不支持 from_json，需要特殊处理
                 break;
+        }
+        if (!routed) {
+            provider->push(OutputChunk::Error("model_not_found", "Model is not registered on worker"));
+            provider->end();
         }
     } else if (request_handler_) {
         request_handler_(type, request, provider);
+    } else {
+        provider->push(OutputChunk::Error("worker_handler_missing", "No worker request handler configured"));
+        provider->end();
     }
     
     // 收集响应并发送回 Master
@@ -457,7 +526,7 @@ void WorkerClient::handle_forward_request(const nlohmann::json& data) {
             } else if (!chunk->embeds.empty()) {
                 chunk_json["embeddings"] = chunk->embeds;
             } else if (!chunk->bytes.empty()) {
-                chunk_json["bytes"] = std::string(chunk->bytes.begin(), chunk->bytes.end());
+                chunk_json["bytes_b64"] = base64_encode(chunk->bytes);
                 chunk_json["mime_type"] = chunk->mime_type;
             }
             chunks.push_back(chunk_json);

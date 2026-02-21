@@ -505,20 +505,35 @@ void Server::handleTranscriptions(const httplib::Request& req, httplib::Response
     }
     struct SlotGuard { Server* s; ~SlotGuard() { s->releaseSlot(); } } guard{this};
     
-    // TODO: 解析 multipart form data 提取 audio 和 model
-    // 简化实现：从 body 中提取 model 参数
     ASRRequest request;
     request.raw_body = req.body;
-    
-    // 尝试从 body 中提取 model
-    size_t model_pos = req.body.find("name=\"model\"");
-    if (model_pos != std::string::npos) {
-        size_t val_start = req.body.find("\r\n\r\n", model_pos);
-        if (val_start != std::string::npos) {
-            val_start += 4;
-            size_t val_end = req.body.find("\r\n", val_start);
-            if (val_end != std::string::npos) {
-                request.model = req.body.substr(val_start, val_end - val_start);
+
+    // 优先使用 httplib 解析后的 multipart form
+    if (req.is_multipart_form_data()) {
+        if (req.form.has_field("model")) {
+            request.model = req.form.get_field("model");
+        } else if (req.has_param("model")) {
+            request.model = req.get_param_value("model");
+        }
+
+        if (req.form.has_file("file")) {
+            auto file = req.form.get_file("file");
+            request.filename = file.filename;
+            request.audio_data.assign(file.content.begin(), file.content.end());
+        }
+    }
+
+    // 回退：兼容旧版字符串提取逻辑
+    if (request.model.empty()) {
+        size_t model_pos = req.body.find("name=\"model\"");
+        if (model_pos != std::string::npos) {
+            size_t val_start = req.body.find("\r\n\r\n", model_pos);
+            if (val_start != std::string::npos) {
+                val_start += 4;
+                size_t val_end = req.body.find("\r\n", val_start);
+                if (val_end != std::string::npos) {
+                    request.model = req.body.substr(val_start, val_end - val_start);
+                }
             }
         }
     }

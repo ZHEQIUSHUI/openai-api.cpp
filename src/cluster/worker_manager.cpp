@@ -4,9 +4,43 @@
 
 #include <sstream>
 #include <iomanip>
+#include <cctype>
 
 namespace openai_api {
 namespace cluster {
+
+namespace {
+
+int base64_index(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+bool base64_decode(const std::string& s, std::vector<uint8_t>* out) {
+    if (!out) return false;
+    out->clear();
+    int val = 0;
+    int valb = -8;
+    for (unsigned char c : s) {
+        if (std::isspace(c)) continue;
+        if (c == '=') break;
+        const int idx = base64_index(c);
+        if (idx < 0) return false;
+        val = (val << 6) + idx;
+        valb += 6;
+        if (valb >= 0) {
+            out->push_back(static_cast<uint8_t>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return true;
+}
+
+}  // namespace
 
 WorkerManager::WorkerManager() = default;
 
@@ -111,20 +145,25 @@ bool WorkerManager::register_worker(const std::string& worker_id,
 }
 
 void WorkerManager::unregister_worker(const std::string& worker_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    auto it = workers_.find(worker_id);
-    if (it == workers_.end()) return;
-    
-    // 清理该 Worker 注册的所有模型
-    for (const auto& model : it->second->registered_models) {
-        model_to_worker_.erase(model);
-        if (on_model_unregistered_) {
+    std::vector<std::string> removed_models;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = workers_.find(worker_id);
+        if (it == workers_.end()) return;
+
+        for (const auto& model : it->second->registered_models) {
+            model_to_worker_.erase(model);
+            removed_models.push_back(model);
+        }
+
+        workers_.erase(it);
+    }
+
+    if (on_model_unregistered_) {
+        for (const auto& model : removed_models) {
             on_model_unregistered_(model);
         }
     }
-    
-    workers_.erase(it);
 }
 
 bool WorkerManager::register_model(const std::string& worker_id, 
@@ -176,16 +215,27 @@ bool WorkerManager::forward_request(const std::string& model_name,
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = model_to_worker_.find(model_name);
-        if (it == model_to_worker_.end()) return false;
+        if (it == model_to_worker_.end()) {
+            provider->push(OutputChunk::Error("model_not_found", "Model not found: " + model_name));
+            provider->end();
+            return false;
+        }
         worker_id = it->second;
         
         auto wit = workers_.find(worker_id);
         if (wit == workers_.end()) {
             provider->push(OutputChunk::Error("worker_not_found", "Worker not found"));
+            provider->end();
             return false;
         }
         worker_host = wit->second->worker_host;
         worker_port = wit->second->worker_port;
+    }
+
+    if (worker_host.empty() || worker_port <= 0) {
+        provider->push(OutputChunk::Error("worker_unreachable", "Worker endpoint is not ready"));
+        provider->end();
+        return false;
     }
     
     auto request_id = generate_request_id();
@@ -246,25 +296,59 @@ void WorkerManager::handle_worker_response(const std::string& request_id,
         context->provider->push(OutputChunk::Error(code, msg));
         context->provider->end();
     } else {
-        // 处理响应数据
-        if (response.contains("chunks")) {
-            // 流式响应
-            for (const auto& chunk_data : response["chunks"]) {
-                OutputChunk chunk;
-                chunk.type = chunk_data.value("is_delta", true) ? 
-                             OutputChunkType::TextDelta : OutputChunkType::FinalText;
+        bool decode_failed = false;
+        auto push_one = [&context, &decode_failed](const nlohmann::json& chunk_data) {
+            OutputChunk chunk;
+
+            if (chunk_data.contains("embeddings")) {
+                chunk.type = OutputChunkType::Embeddings;
+                for (const auto& emb : chunk_data["embeddings"]) {
+                    if (!emb.is_array()) continue;
+                    std::vector<float> vec;
+                    vec.reserve(emb.size());
+                    for (const auto& v : emb) {
+                        vec.push_back(v.get<float>());
+                    }
+                    chunk.embeds.push_back(std::move(vec));
+                }
+            } else if (chunk_data.contains("embedding")) {
+                chunk.type = OutputChunkType::Embedding;
+                if (chunk_data["embedding"].is_array()) {
+                    for (const auto& v : chunk_data["embedding"]) {
+                        chunk.embedding.push_back(v.get<float>());
+                    }
+                }
+            } else if (chunk_data.contains("bytes_b64")) {
+                chunk.type = OutputChunkType::AudioBytes;
+                chunk.mime_type = chunk_data.value("mime_type", "application/octet-stream");
+                if (!base64_decode(chunk_data.value("bytes_b64", ""), &chunk.bytes)) {
+                    context->provider->push(OutputChunk::Error(
+                        "decode_error", "Failed to decode worker binary payload"));
+                    decode_failed = true;
+                    return;
+                }
+                if (chunk.mime_type.rfind("image/", 0) == 0) {
+                    chunk.type = OutputChunkType::ImageBytes;
+                }
+            } else {
+                const bool is_delta = chunk_data.value("is_delta", false);
+                chunk.type = is_delta ? OutputChunkType::TextDelta : OutputChunkType::FinalText;
                 chunk.text = chunk_data.value("text", "");
                 if (chunk_data.contains("finish_reason")) {
                     chunk.obj["finish_reason"] = chunk_data.value("finish_reason", "");
                 }
-                context->provider->push(chunk);
+            }
+
+            context->provider->push(std::move(chunk));
+        };
+
+        if (response.contains("chunks") && response["chunks"].is_array()) {
+            for (const auto& chunk_data : response["chunks"]) {
+                push_one(chunk_data);
+                if (decode_failed) break;
             }
         } else {
-            // 非流式响应
-            OutputChunk chunk;
-            chunk.type = OutputChunkType::FinalText;
-            chunk.text = response.value("text", "");
-            context->provider->push(chunk);
+            push_one(response);
         }
         context->provider->end();
     }
@@ -292,28 +376,37 @@ void WorkerManager::heartbeat_loop() {
 }
 
 void WorkerManager::cleanup_dead_workers() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    auto now = std::chrono::steady_clock::now();
-    std::vector<std::string> dead_workers;
-    
-    for (const auto& [id, conn] : workers_) {
-        auto elapsed = now - conn->last_heartbeat;
-        if (elapsed > std::chrono::seconds(30)) {
-            dead_workers.push_back(id);
+    std::vector<std::string> removed_models;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto now = std::chrono::steady_clock::now();
+        std::vector<std::string> dead_workers;
+
+        for (const auto& [id, conn] : workers_) {
+            auto elapsed = now - conn->last_heartbeat;
+            if (elapsed > std::chrono::seconds(30)) {
+                dead_workers.push_back(id);
+            }
+        }
+
+        for (const auto& id : dead_workers) {
+            auto it = workers_.find(id);
+            if (it == workers_.end()) continue;
+
+            for (const auto& model : it->second->registered_models) {
+                model_to_worker_.erase(model);
+                removed_models.push_back(model);
+            }
+
+            workers_.erase(it);
         }
     }
-    
-    for (const auto& id : dead_workers) {
-        auto it = workers_.find(id);
-        if (it == workers_.end()) continue;
-        
-        // 清理模型
-        for (const auto& model : it->second->registered_models) {
-            model_to_worker_.erase(model);
+
+    if (on_model_unregistered_) {
+        for (const auto& model : removed_models) {
+            on_model_unregistered_(model);
         }
-        
-        workers_.erase(it);
     }
 }
 
