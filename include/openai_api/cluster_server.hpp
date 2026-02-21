@@ -155,6 +155,9 @@ public:
     cluster::WorkerClient* getWorkerClient() { return worker_client_.get(); }
 
 private:
+    // 独立模式启动（不启用集群组件）
+    bool runAsStandalone(int port);
+
     // 尝试作为 Master 启动
     bool tryStartMaster(int port);
     
@@ -166,6 +169,9 @@ private:
     
     // 注册本地模型到 Master（Worker 模式）
     void registerLocalModelsToMaster();
+
+    // 注册本地暂存模型到本地 Server（Master/Standalone 模式）
+    void registerLocalModelsToServer();
     
     // 设置 Worker 请求处理器
     void setupWorkerHandler();

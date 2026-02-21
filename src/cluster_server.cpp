@@ -68,8 +68,8 @@ void ClusterServer::registerChat(const std::string& model_name, ChatCallback cal
             callback(chat_req, provider);
         };
         local_models_.push_back(model);
-    } else if (mode_ == ClusterMode::MASTER && server_) {
-        // Master 模式：直接注册到本地 Server
+    } else if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
+        // Master/Standalone 运行中：直接注册到本地 Server
         server_->registerChat(model_name, callback);
     } else {
         // STANDALONE 模式或尚未确定模式：暂存
@@ -96,7 +96,7 @@ void ClusterServer::registerEmbedding(const std::string& model_name, EmbeddingCa
             callback(emb_req, provider);
         };
         local_models_.push_back(model);
-    } else if (mode_ == ClusterMode::MASTER && server_) {
+    } else if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
         server_->registerEmbedding(model_name, callback);
     } else {
         LocalModel model;
@@ -128,7 +128,7 @@ void ClusterServer::registerASR(const std::string& model_name, ASRCallback callb
             callback(asr_req, provider);
         };
         local_models_.push_back(model);
-    } else if (mode_ == ClusterMode::MASTER && server_) {
+    } else if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
         server_->registerASR(model_name, callback);
     } else {
         LocalModel model;
@@ -159,7 +159,7 @@ void ClusterServer::registerTTS(const std::string& model_name, TTSCallback callb
             callback(tts_req, provider);
         };
         local_models_.push_back(model);
-    } else if (mode_ == ClusterMode::MASTER && server_) {
+    } else if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
         server_->registerTTS(model_name, callback);
     } else {
         LocalModel model;
@@ -185,7 +185,7 @@ void ClusterServer::registerImageGeneration(const std::string& model_name, Image
             callback(img_req, provider);
         };
         local_models_.push_back(model);
-    } else if (mode_ == ClusterMode::MASTER && server_) {
+    } else if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
         server_->registerImageGeneration(model_name, callback);
     } else {
         LocalModel model;
@@ -200,26 +200,31 @@ void ClusterServer::registerImageGeneration(const std::string& model_name, Image
 }
 
 std::vector<std::string> ClusterServer::listModels() const {
-    if (mode_ == ClusterMode::MASTER && server_) {
+    if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
         return server_->listModels();
     }
     return {};
 }
 
 bool ClusterServer::hasModel(const std::string& model_name) const {
-    if (mode_ == ClusterMode::MASTER && server_) {
+    if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
         return server_->hasModel(model_name);
     }
     return false;
 }
 
 void ClusterServer::unregisterModel(const std::string& model_name) {
-    if (mode_ == ClusterMode::MASTER && server_) {
+    if ((mode_ == ClusterMode::MASTER || mode_ == ClusterMode::STANDALONE) && server_) {
         server_->unregisterModel(model_name);
     }
 }
 
 ClusterMode ClusterServer::run(int port) {
+    if (!options_.enable_cluster) {
+        runAsStandalone(port);
+        return mode_;
+    }
+
     // 尝试自动检测模式
     // 1. 先尝试作为 Master 启动
     // 2. 如果端口被占用，检测是否为集群服务
@@ -239,8 +244,9 @@ ClusterMode ClusterServer::run(int port) {
     }
     
     // 无法启动
-    std::cerr << "Failed to start server on port " << port << std::endl;
+    std::cerr << "Failed to start cluster mode on port " << port << std::endl;
     std::cerr << "Port is occupied and not a cluster service" << std::endl;
+    running_ = false;
     mode_ = ClusterMode::STANDALONE;
     return mode_;
 }
@@ -261,56 +267,7 @@ bool ClusterServer::runAsMaster(int port) {
         server_->setApiKey(options_.server.api_key);
     }
     
-    // 注册本地暂存的模型（Master 本地模型）
-    {
-        std::lock_guard<std::mutex> lock(models_mutex_);
-        for (const auto& model : local_models_) {
-            switch (model.type) {
-                case cluster::ModelType::CHAT: {
-                    auto callback = [model](const ChatRequest& req, std::shared_ptr<BaseDataProvider> provider) {
-                        model.callback(req.raw, provider);
-                    };
-                    server_->registerChat(model.name, callback);
-                    break;
-                }
-                case cluster::ModelType::EMBEDDING: {
-                    auto callback = [model](const EmbeddingRequest& req, std::shared_ptr<BaseDataProvider> provider) {
-                        model.callback(req.raw, provider);
-                    };
-                    server_->registerEmbedding(model.name, callback);
-                    break;
-                }
-                case cluster::ModelType::ASR: {
-                    auto callback = [model](const ASRRequest& req, std::shared_ptr<BaseDataProvider> provider) {
-                        nlohmann::json req_json;
-                        req_json["model"] = req.model;
-                        req_json["language"] = req.language;
-                        req_json["prompt"] = req.prompt;
-                        req_json["response_format"] = req.response_format;
-                        req_json["temperature"] = req.temperature;
-                        model.callback(req_json, provider);
-                    };
-                    server_->registerASR(model.name, callback);
-                    break;
-                }
-                case cluster::ModelType::TTS: {
-                    auto callback = [model](const TTSRequest& req, std::shared_ptr<BaseDataProvider> provider) {
-                        model.callback(req.raw, provider);
-                    };
-                    server_->registerTTS(model.name, callback);
-                    break;
-                }
-                case cluster::ModelType::IMAGE_GEN: {
-                    auto callback = [model](const ImageGenRequest& req, std::shared_ptr<BaseDataProvider> provider) {
-                        model.callback(req.raw, provider);
-                    };
-                    server_->registerImageGeneration(model.name, callback);
-                    break;
-                }
-            }
-        }
-        local_models_.clear();
-    }
+    registerLocalModelsToServer();
     
     // 启动 WorkerManager（内部端口 = 外部端口 + 1000）
     if (options_.enable_cluster) {
@@ -389,6 +346,23 @@ bool ClusterServer::runAsMaster(int port) {
     // 启动 Server（阻塞）
     server_->run(port);
     
+    return true;
+}
+
+bool ClusterServer::runAsStandalone(int port) {
+    mode_ = ClusterMode::STANDALONE;
+
+    server_ = std::make_unique<Server>();
+    server_->setMaxConcurrency(options_.server.max_concurrency);
+    server_->setTimeout(options_.server.default_timeout);
+    if (!options_.server.api_key.empty()) {
+        server_->setApiKey(options_.server.api_key);
+    }
+
+    registerLocalModelsToServer();
+
+    running_ = true;
+    server_->run(port);
     return true;
 }
 
@@ -576,6 +550,58 @@ void ClusterServer::registerLocalModelsToMaster() {
     std::lock_guard<std::mutex> lock(models_mutex_);
     for (const auto& model : local_models_) {
         worker_client_->register_model(model.type, model.name);
+    }
+    local_models_.clear();
+}
+
+void ClusterServer::registerLocalModelsToServer() {
+    if (!server_) return;
+
+    std::lock_guard<std::mutex> lock(models_mutex_);
+    for (const auto& model : local_models_) {
+        switch (model.type) {
+            case cluster::ModelType::CHAT: {
+                auto callback = [model](const ChatRequest& req, std::shared_ptr<BaseDataProvider> provider) {
+                    model.callback(req.raw, provider);
+                };
+                server_->registerChat(model.name, callback);
+                break;
+            }
+            case cluster::ModelType::EMBEDDING: {
+                auto callback = [model](const EmbeddingRequest& req, std::shared_ptr<BaseDataProvider> provider) {
+                    model.callback(req.raw, provider);
+                };
+                server_->registerEmbedding(model.name, callback);
+                break;
+            }
+            case cluster::ModelType::ASR: {
+                auto callback = [model](const ASRRequest& req, std::shared_ptr<BaseDataProvider> provider) {
+                    nlohmann::json req_json;
+                    req_json["model"] = req.model;
+                    req_json["language"] = req.language;
+                    req_json["prompt"] = req.prompt;
+                    req_json["response_format"] = req.response_format;
+                    req_json["temperature"] = req.temperature;
+                    model.callback(req_json, provider);
+                };
+                server_->registerASR(model.name, callback);
+                break;
+            }
+            case cluster::ModelType::TTS: {
+                auto callback = [model](const TTSRequest& req, std::shared_ptr<BaseDataProvider> provider) {
+                    model.callback(req.raw, provider);
+                };
+                server_->registerTTS(model.name, callback);
+                break;
+            }
+            case cluster::ModelType::IMAGE_GEN: {
+                auto callback = [model](const ImageGenRequest& req, std::shared_ptr<BaseDataProvider> provider) {
+                    model.callback(req.raw, provider);
+                };
+                server_->registerImageGeneration(model.name, callback);
+                break;
+            }
+        }
     }
     local_models_.clear();
 }
