@@ -1,7 +1,7 @@
 # Multi-stage build for OpenAI API Server
 
 # Build stage
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -23,7 +23,7 @@ RUN cmake -B build -G Ninja \
     && cmake --build build --parallel
 
 # Runtime stage
-FROM ubuntu:22.04
+FROM ubuntu:26.04
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
