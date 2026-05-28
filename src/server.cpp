@@ -325,7 +325,12 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         res.set_content(ErrorEncoder::rate_limit(), "application/json");
         return;
     }
-    struct SlotGuard { Server* s; ~SlotGuard() { s->releaseSlot(); } } guard{this};
+    struct SlotGuard {
+        Server* s;
+        ~SlotGuard() {
+            if (s) s->releaseSlot();
+        }
+    } guard{this};
     
     // 解析请求
     nlohmann::json req_json;
@@ -401,6 +406,7 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         state->timeout = options_.default_timeout;
         
         // 使用 chunked content provider 支持流式传输
+        guard.s = nullptr;
         res.set_chunked_content_provider("text/event-stream",
             [state](size_t offset, httplib::DataSink& sink) -> bool {
                 if (state->done.load()) {
@@ -449,6 +455,9 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
                 }
                 
                 return true;  // 继续等待
+            },
+            [this](bool /*success*/) {
+                this->releaseSlot();
             }
         );
         
