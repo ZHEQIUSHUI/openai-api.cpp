@@ -49,6 +49,8 @@ struct ChatRequest {
     float temperature = 1.0f;
     bool has_top_p = false;
     float top_p = 1.0f;
+    bool has_enable_thinking = false;
+    bool enable_thinking = true;
     int max_tokens = 2048;
     int n = 1;
     std::vector<std::string> stop;
@@ -108,6 +110,16 @@ struct ChatRequest {
         if (j.contains("stream")) req.stream = j["stream"].get<bool>();
         if (j.contains("temperature")) { req.has_temperature = true; req.temperature = j["temperature"].get<float>(); }
         if (j.contains("top_p")) { req.has_top_p = true; req.top_p = j["top_p"].get<float>(); }
+        if (j.contains("enable_thinking") && j["enable_thinking"].is_boolean()) {
+            req.has_enable_thinking = true;
+            req.enable_thinking = j["enable_thinking"].get<bool>();
+        } else if (j.contains("chat_template_kwargs") &&
+                   j["chat_template_kwargs"].is_object() &&
+                   j["chat_template_kwargs"].contains("enable_thinking") &&
+                   j["chat_template_kwargs"]["enable_thinking"].is_boolean()) {
+            req.has_enable_thinking = true;
+            req.enable_thinking = j["chat_template_kwargs"]["enable_thinking"].get<bool>();
+        }
         if (j.contains("max_tokens")) req.max_tokens = j["max_tokens"].get<int>();
         if (j.contains("n")) req.n = j["n"].get<int>();
         if (j.contains("presence_penalty")) req.presence_penalty = j["presence_penalty"].get<float>();
