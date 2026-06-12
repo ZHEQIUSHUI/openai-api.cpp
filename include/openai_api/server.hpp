@@ -91,7 +91,13 @@ public:
      * 设置默认超时时间
      */
     void setTimeout(std::chrono::milliseconds timeout);
-    
+
+    /**
+     * 设置并发槽排队等待超时（请求等待空闲推理槽的最长时间，超时返回 503）。
+     * 默认 5000ms；串行推理场景建议设为与请求超时一致，让请求排队而非被拒。
+     */
+    void setWaitTimeout(std::chrono::milliseconds timeout);
+
     /**
      * 设置 API key（启用认证）
      */

@@ -32,6 +32,10 @@ void Server::setTimeout(std::chrono::milliseconds timeout) {
     options_.default_timeout = timeout;
 }
 
+void Server::setWaitTimeout(std::chrono::milliseconds timeout) {
+    options_.wait_timeout = timeout;
+}
+
 void Server::setApiKey(const std::string& api_key) {
     options_.api_key = api_key;
 }
