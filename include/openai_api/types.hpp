@@ -51,6 +51,8 @@ struct ChatRequest {
     float top_p = 1.0f;
     bool has_enable_thinking = false;
     bool enable_thinking = true;
+    bool has_thinking_mode = false;
+    std::string thinking_mode; // raw string ("think"/"no_think"/"default"); interpreted by the app
     int max_tokens = 2048;
     int n = 1;
     std::vector<std::string> stop;
@@ -119,6 +121,16 @@ struct ChatRequest {
                    j["chat_template_kwargs"]["enable_thinking"].is_boolean()) {
             req.has_enable_thinking = true;
             req.enable_thinking = j["chat_template_kwargs"]["enable_thinking"].get<bool>();
+        }
+        if (j.contains("thinking_mode") && j["thinking_mode"].is_string()) {
+            req.has_thinking_mode = true;
+            req.thinking_mode = j["thinking_mode"].get<std::string>();
+        } else if (j.contains("chat_template_kwargs") &&
+                   j["chat_template_kwargs"].is_object() &&
+                   j["chat_template_kwargs"].contains("thinking_mode") &&
+                   j["chat_template_kwargs"]["thinking_mode"].is_string()) {
+            req.has_thinking_mode = true;
+            req.thinking_mode = j["chat_template_kwargs"]["thinking_mode"].get<std::string>();
         }
         if (j.contains("max_tokens")) req.max_tokens = j["max_tokens"].get<int>();
         if (j.contains("n")) req.n = j["n"].get<int>();
