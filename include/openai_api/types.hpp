@@ -56,7 +56,9 @@ struct ChatRequest {
     int max_tokens = 2048;
     int n = 1;
     std::vector<std::string> stop;
+    bool has_presence_penalty = false;
     float presence_penalty = 0.0f;
+    bool has_frequency_penalty = false;
     float frequency_penalty = 0.0f;
     
     // 原始 JSON（供扩展用）
@@ -134,8 +136,8 @@ struct ChatRequest {
         }
         if (j.contains("max_tokens")) req.max_tokens = j["max_tokens"].get<int>();
         if (j.contains("n")) req.n = j["n"].get<int>();
-        if (j.contains("presence_penalty")) req.presence_penalty = j["presence_penalty"].get<float>();
-        if (j.contains("frequency_penalty")) req.frequency_penalty = j["frequency_penalty"].get<float>();
+        if (j.contains("presence_penalty")) { req.has_presence_penalty = true; req.presence_penalty = j["presence_penalty"].get<float>(); }
+        if (j.contains("frequency_penalty")) { req.has_frequency_penalty = true; req.frequency_penalty = j["frequency_penalty"].get<float>(); }
         
         if (j.contains("messages") && j["messages"].is_array()) {
             req.messages = j["messages"];
