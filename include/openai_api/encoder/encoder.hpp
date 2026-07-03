@@ -174,8 +174,16 @@ public:
         nlohmann::json choice;
         choice["index"] = chunk.index;
         choice["message"]["role"] = "assistant";
-        choice["message"]["content"] = chunk.text;
-        choice["finish_reason"] = "stop";
+        // Native tool calling: if the producer attached tool_calls to the chunk, emit an
+        // OpenAI tool_calls message (finish_reason "tool_calls") instead of a text message.
+        if (chunk.obj.contains("tool_calls") && chunk.obj["tool_calls"].is_array() && !chunk.obj["tool_calls"].empty()) {
+            choice["message"]["content"] = nullptr;
+            choice["message"]["tool_calls"] = chunk.obj["tool_calls"];
+            choice["finish_reason"] = "tool_calls";
+        } else {
+            choice["message"]["content"] = chunk.text;
+            choice["finish_reason"] = "stop";
+        }
         
         j["choices"] = nlohmann::json::array({choice});
         
