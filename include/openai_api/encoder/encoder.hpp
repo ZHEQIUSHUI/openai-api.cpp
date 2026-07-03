@@ -113,8 +113,14 @@ private:
         
         nlohmann::json choice;
         choice["index"] = chunk.index;
-        choice["delta"]["content"] = chunk.text;
         choice["delta"]["role"] = "assistant";
+        if (chunk.obj.contains("tool_calls") && chunk.obj["tool_calls"].is_array() && !chunk.obj["tool_calls"].empty()) {
+            nlohmann::json tcs = chunk.obj["tool_calls"];
+            for (size_t k = 0; k < tcs.size(); ++k) if (!tcs[k].contains("index")) tcs[k]["index"] = (int)k; // OpenAI streaming needs index
+            choice["delta"]["tool_calls"] = tcs;
+        } else {
+            choice["delta"]["content"] = chunk.text;
+        }
         choice["finish_reason"] = nullptr;
         
         j["choices"] = nlohmann::json::array({choice});
@@ -131,7 +137,7 @@ private:
         nlohmann::json choice;
         choice["index"] = chunk.index;
         choice["delta"] = nlohmann::json::object();
-        choice["finish_reason"] = "stop";
+        choice["finish_reason"] = chunk.obj.contains("finish_reason") ? chunk.obj["finish_reason"] : nlohmann::json("stop");
 
         j["choices"] = nlohmann::json::array({choice});
 
