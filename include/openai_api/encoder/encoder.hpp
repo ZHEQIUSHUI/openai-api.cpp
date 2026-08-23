@@ -144,6 +144,11 @@ private:
         j["usage"]["prompt_tokens"] = chunk.usage.prompt_tokens;
         j["usage"]["completion_tokens"] = chunk.usage.completion_tokens;
         j["usage"]["total_tokens"] = chunk.usage.total_tokens;
+        // AXERA performance metrics: emitted only when measured (see Usage struct).
+        if (chunk.usage.ttft_ms >= 0.0f)
+            j["usage"]["ttft_ms"] = chunk.usage.ttft_ms;
+        if (chunk.usage.decode_tps > 0.0f)
+            j["usage"]["decode_tps"] = chunk.usage.decode_tps;
 
         return j;
     }

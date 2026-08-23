@@ -61,6 +61,10 @@ struct OutputChunk {
         int prompt_tokens = 0;
         int completion_tokens = 0;
         int total_tokens = 0;
+        // Optional AXERA performance metrics. Negative/zero means "not measured";
+        // the SSE encoder omits the corresponding field in that case.
+        float ttft_ms = -1.0f;      // time to first token, milliseconds
+        float decode_tps = -1.0f;   // decode throughput, tokens per second
     } usage;
 
     // 构造函数
