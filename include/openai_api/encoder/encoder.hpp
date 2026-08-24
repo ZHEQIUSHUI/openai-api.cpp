@@ -149,6 +149,10 @@ private:
             j["usage"]["ttft_ms"] = chunk.usage.ttft_ms;
         if (chunk.usage.decode_tps > 0.0f)
             j["usage"]["decode_tps"] = chunk.usage.decode_tps;
+        if (chunk.usage.prefill_tps > 0.0f)
+            j["usage"]["prefill_tps"] = chunk.usage.prefill_tps;
+        if (chunk.usage.prefill_tokens >= 0)
+            j["usage"]["prefill_tokens"] = chunk.usage.prefill_tokens;
 
         return j;
     }
