@@ -206,7 +206,18 @@ public:
         j["usage"]["prompt_tokens"] = chunk.usage.prompt_tokens;
         j["usage"]["completion_tokens"] = chunk.usage.completion_tokens;
         j["usage"]["total_tokens"] = chunk.usage.total_tokens;
-        
+        // AXERA performance metrics: emitted only when measured (see Usage struct).
+        // Keep in sync with SSEEncoder::create_sse_finish — the streaming finish
+        // chunk emits the same fields; the non-streaming response must match.
+        if (chunk.usage.ttft_ms >= 0.0f)
+            j["usage"]["ttft_ms"] = chunk.usage.ttft_ms;
+        if (chunk.usage.decode_tps > 0.0f)
+            j["usage"]["decode_tps"] = chunk.usage.decode_tps;
+        if (chunk.usage.prefill_tps > 0.0f)
+            j["usage"]["prefill_tps"] = chunk.usage.prefill_tps;
+        if (chunk.usage.prefill_tokens >= 0)
+            j["usage"]["prefill_tokens"] = chunk.usage.prefill_tokens;
+
         return detail::json_dump_utf8_safe(j, 2);
     }
 };
