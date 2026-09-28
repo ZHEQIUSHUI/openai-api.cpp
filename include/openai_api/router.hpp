@@ -51,6 +51,12 @@ public:
     bool hasImageGenModel(const std::string& model_name) const;
     std::optional<bool> chatModelSupportsVision(const std::string& model_name) const;
     nlohmann::json chatModelExtraFields(const std::string& model_name) const;
+
+    // 任意类型模型(chat/embedding/asr/...)在 /v1/models 中附带的额外字段,
+    // 例如 prefill_max_token_num / max_token_len。与 chat 的 ChatModelOptions::extra_fields 合并,
+    // 此处设置的同名字段优先。
+    void setModelExtraFields(const std::string& model_name, nlohmann::json fields);
+    nlohmann::json modelExtraFields(const std::string& model_name) const;
     
     // 获取模型列表
     std::vector<std::string> listChatModels() const;
@@ -82,6 +88,7 @@ private:
     std::unordered_map<std::string, ASRCallback> asr_models_;
     std::unordered_map<std::string, TTSCallback> tts_models_;
     std::unordered_map<std::string, ImageGenCallback> image_gen_models_;
+    std::unordered_map<std::string, nlohmann::json> model_extra_fields_;
 };
 
 } // namespace openai_api
