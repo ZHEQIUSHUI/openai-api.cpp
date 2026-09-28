@@ -154,6 +154,28 @@ nlohmann::json ModelRouter::chatModelExtraFields(const std::string& model_name) 
     return it->second.options.extra_fields;
 }
 
+void ModelRouter::setModelExtraFields(const std::string& model_name, nlohmann::json fields) {
+    std::unique_lock lock(mutex_);
+    if (fields.is_object()) {
+        model_extra_fields_[model_name] = std::move(fields);
+    } else {
+        model_extra_fields_.erase(model_name);
+    }
+}
+
+nlohmann::json ModelRouter::modelExtraFields(const std::string& model_name) const {
+    std::shared_lock lock(mutex_);
+    nlohmann::json out = nlohmann::json::object();
+    if (auto it = chat_models_.find(model_name); it != chat_models_.end() &&
+        it->second.options.extra_fields.is_object()) {
+        out.update(it->second.options.extra_fields);
+    }
+    if (auto it = model_extra_fields_.find(model_name); it != model_extra_fields_.end()) {
+        out.update(it->second);
+    }
+    return out;
+}
+
 bool ModelRouter::hasEmbeddingModel(const std::string& model_name) const {
     std::shared_lock lock(mutex_);
     return embedding_models_.find(model_name) != embedding_models_.end();

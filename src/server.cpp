@@ -55,6 +55,10 @@ void Server::registerChat(const std::string& model_name, ChatCallback callback,
     router_.registerChat(model_name, std::move(callback), std::move(options));
 }
 
+void Server::setModelExtraFields(const std::string& model_name, nlohmann::json fields) {
+    router_.setModelExtraFields(model_name, std::move(fields));
+}
+
 void Server::registerEmbedding(const std::string& model_name, EmbeddingCallback callback) {
     router_.registerEmbedding(model_name, std::move(callback));
 }
@@ -91,6 +95,7 @@ void Server::unregisterModel(const std::string& model_name) {
     router_.unregisterASR(model_name);
     router_.unregisterTTS(model_name);
     router_.unregisterImageGeneration(model_name);
+    router_.setModelExtraFields(model_name, nullptr);
 }
 
 // ============ 运行控制 ============
@@ -298,7 +303,7 @@ void Server::handleModels(const httplib::Request& req, httplib::Response& res) {
                 ? nlohmann::json::array({"text", "image"})
                 : nlohmann::json::array({"text"});
         }
-        auto extra_fields = router_.chatModelExtraFields(model_name);
+        auto extra_fields = router_.modelExtraFields(model_name);
         if (extra_fields.is_object()) {
             for (auto it = extra_fields.begin(); it != extra_fields.end(); ++it) {
                 if (it.key() == "id" || it.key() == "object" || it.key() == "created" ||

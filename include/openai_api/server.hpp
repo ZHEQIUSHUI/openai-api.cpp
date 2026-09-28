@@ -123,6 +123,12 @@ public:
      * 注册 Embedding 模型
      */
     void registerEmbedding(const std::string& model_name, EmbeddingCallback callback);
+
+    /**
+     * 为任意已注册(或即将注册)的模型设置 /v1/models 中附带的额外字段,
+     * 例如 {"prefill_max_token_num": 1408, "max_token_len": 1407}
+     */
+    void setModelExtraFields(const std::string& model_name, nlohmann::json fields);
     
     /**
      * 注册 ASR 模型

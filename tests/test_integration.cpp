@@ -110,6 +110,13 @@ void test_chat_multimodal_capabilities() {
         provider->end();
     }, vision_options);
 
+    server.registerEmbedding("embed-model", [](const EmbeddingRequest& req, auto provider) {
+        provider->end();
+    });
+    server.setModelExtraFields("embed-model", {{"prefill_max_token_num", 1408}, {"max_token_len", 1407}});
+    // generic fields merge over the chat options' extra_fields
+    server.setModelExtraFields("text-only", {{"max_output_tokens", 1024}});
+
     ServerOptions options;
     options.host = "127.0.0.1";
     options.port = 18126;
@@ -131,12 +138,13 @@ void test_chat_multimodal_capabilities() {
 
     bool saw_text_only = false;
     bool saw_vision = false;
+    bool saw_embed = false;
     for (const auto& model : models_json["data"]) {
         if (model["id"] == "text-only") {
             saw_text_only = true;
             assert(model["capabilities"]["vision"] == false);
             assert(model["context_window"] == 8192);
-            assert(model["max_output_tokens"] == 2048);
+            assert(model["max_output_tokens"] == 1024);
             assert(model["input_modalities"].size() == 1);
         } else if (model["id"] == "vision-model") {
             saw_vision = true;
@@ -144,10 +152,16 @@ void test_chat_multimodal_capabilities() {
             assert(model["context_window"] == 32768);
             assert(model["max_output_tokens"] == 8192);
             assert(model["input_modalities"].size() == 2);
+        } else if (model["id"] == "embed-model") {
+            saw_embed = true;
+            assert(model["prefill_max_token_num"] == 1408);
+            assert(model["max_token_len"] == 1407);
+            assert(!model.contains("capabilities"));
         }
     }
     assert(saw_text_only);
     assert(saw_vision);
+    assert(saw_embed);
 
     nlohmann::json image_chat = {
         {"model", "text-only"},
