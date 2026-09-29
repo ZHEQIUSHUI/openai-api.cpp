@@ -228,6 +228,14 @@ public:
 class EmbeddingsJSONEncoder : public Encoder {
 public:
     std::string encode(const OutputChunk& chunk) override {
+        if (chunk.type == OutputChunkType::Error) {
+            nlohmann::json err;
+            err["error"]["message"] = chunk.error_message;
+            err["error"]["type"] = chunk.error_code;
+            err["error"]["code"] = chunk.error_code;
+            return detail::json_dump_utf8_safe(err, 2);
+        }
+
         nlohmann::json j;
         j["object"] = "list";
         

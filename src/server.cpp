@@ -475,8 +475,10 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         // 非流式响应
         auto chunk = provider->wait_pop_for(options_.default_timeout);
         if (!chunk.has_value()) {
-            res.status = 504;
-            res.set_content(ErrorEncoder::server_error("Request timeout"), "application/json");
+            const bool ended = !provider->is_timed_out();
+            res.status = ended ? 500 : 504;
+            res.set_content(ErrorEncoder::server_error(ended ? "Model returned no output" : "Request timeout"),
+                            "application/json");
             return;
         }
         if (chunk->is_error()) {
@@ -550,8 +552,11 @@ void Server::handleEmbeddings(const httplib::Request& req, httplib::Response& re
     
     auto chunk = provider->wait_pop_for(options_.default_timeout);
     if (!chunk.has_value()) {
-        res.status = 504;
-        res.set_content(ErrorEncoder::server_error("Request timeout"), "application/json");
+        // the model callback ended without output: report it as such, not as a timeout
+        const bool ended = !provider->is_timed_out();
+        res.status = ended ? 500 : 504;
+        res.set_content(ErrorEncoder::server_error(ended ? "Model returned no output" : "Request timeout"),
+                        "application/json");
         return;
     }
     if (chunk->is_error()) {
@@ -879,8 +884,11 @@ void Server::handleLlamaEmbeddings(const httplib::Request& req, httplib::Respons
 
     auto chunk = provider->wait_pop_for(options_.default_timeout);
     if (!chunk.has_value()) {
-        res.status = 504;
-        res.set_content(ErrorEncoder::server_error("Request timeout"), "application/json");
+        // the model callback ended without output: report it as such, not as a timeout
+        const bool ended = !provider->is_timed_out();
+        res.status = ended ? 500 : 504;
+        res.set_content(ErrorEncoder::server_error(ended ? "Model returned no output" : "Request timeout"),
+                        "application/json");
         return;
     }
     if (chunk->is_error()) {

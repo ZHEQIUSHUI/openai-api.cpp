@@ -169,6 +169,15 @@ public:
     }
     
     /**
+     * 是否因超时而结束（区分“模型没有输出就结束”与“等待超时”）
+     */
+    bool is_timed_out() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        check_timeout_locked();
+        return timed_out_;
+    }
+
+    /**
      * 检查是否已结束
      */
     bool is_ended() override {
@@ -309,6 +318,7 @@ private:
         if (elapsed > timeout_) {
             // 超时，自动标记结束
             const_cast<QueueProvider*>(this)->ended_ = true;
+            const_cast<QueueProvider*>(this)->timed_out_ = true;
             return true;
         }
         return false;
@@ -317,6 +327,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::queue<OutputChunk> queue_;
+    bool timed_out_ = false;
     
     std::chrono::milliseconds timeout_;
     std::atomic<bool> ended_;

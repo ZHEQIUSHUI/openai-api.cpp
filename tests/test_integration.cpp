@@ -190,6 +190,46 @@ void test_chat_multimodal_capabilities() {
 }
 
 // 测试完整的端到端流程
+void test_embedding_errors() {
+    std::cout << "Test: embedding_errors... " << std::flush;
+
+    Server server;
+    server.registerEmbedding("embed-error", [](const EmbeddingRequest& req, auto provider) {
+        provider->push(OutputChunk::Error("model_error", "input too long"));
+        provider->end();
+    });
+    server.registerEmbedding("embed-silent", [](const EmbeddingRequest& req, auto provider) {
+        provider->end();  // no output at all
+    });
+
+    ServerOptions options;
+    options.host = "127.0.0.1";
+    options.port = 18127;
+    options.default_timeout = std::chrono::milliseconds(5000);
+    std::thread server_thread([&server, options]() { server.run(options); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    httplib::Client client("127.0.0.1", 18127);
+    client.set_read_timeout(10);
+
+    auto res = client.Post("/v1/embeddings", R"({"model":"embed-error","input":"hi"})", "application/json");
+    assert(res && res->status == 400);
+    auto j = nlohmann::json::parse(res->body);
+    assert(j["error"]["message"] == "input too long");
+    assert(j["error"]["code"] == "model_error");
+
+    auto t0 = std::chrono::steady_clock::now();
+    res = client.Post("/v1/embeddings", R"({"model":"embed-silent","input":"hi"})", "application/json");
+    auto elapsed = std::chrono::steady_clock::now() - t0;
+    assert(res && res->status == 500);  // not a 504 "timeout" after waiting default_timeout
+    assert(nlohmann::json::parse(res->body)["error"]["message"] == "Model returned no output");
+    assert(elapsed < std::chrono::milliseconds(3000));
+
+    server.stop();
+    server_thread.join();
+    std::cout << "PASSED" << std::endl;
+}
+
 void test_end_to_end() {
     std::cout << "Test: end_to_end... " << std::flush;
     
@@ -302,6 +342,7 @@ int main() {
     test_model_registration();
     test_chat_multimodal_parsing();
     test_chat_multimodal_capabilities();
+    test_embedding_errors();
     test_end_to_end();
     test_error_handling();
     test_model_routing();
