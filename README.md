@@ -7,6 +7,7 @@
 - **库形式**：作为 CMake 库供其他项目引入
 - **多模型路由**：同一端点支持多个算法实现（如 ASR 同时支持 Whisper 和 SenseVoice）
 - **集群模式**：支持 Master-Worker 架构，多个 Worker 进程可以注册到同一个 Master
+- **统一网关**：把多个独立的 OpenAI 兼容服务按模型名聚合到一个端口，请求和流式响应原样透传，支持动态注册、健康检查和调用统计
 - **模型验证**：自动验证请求的模型是否已注册
 - **完整 API 支持**：Chat、Embedding、ASR、TTS、Image Generation
 - **流式输出**：支持 SSE 流式响应
@@ -336,6 +337,23 @@ curl http://192.168.1.100:8080/v1/chat/completions \
   -d '{"model": "worker-1-model", "messages": [...]}'
 ```
 
+## 统一网关 (Upstream 透传)
+
+`openai_api_gateway` 把多个独立运行的 OpenAI 兼容服务（例如每个模型一个 `axllm serve` 进程）聚合到一个端口，按请求中的 `model` 字段原样转发，后端无需改造。上游可以在启动参数里给出，也可以由管理平台通过 `/admin/upstreams` 动态注册。
+
+```bash
+./openai_api_gateway --port 8000 --state upstreams.json \
+    --upstream qwen3-4b=http://127.0.0.1:18001
+
+# 运行时注册 / 查看 / 注销（默认只允许本机访问）
+curl -X POST http://127.0.0.1:8000/admin/upstreams \
+     -d '{"model":"qwen3-vl-2b","base_url":"http://127.0.0.1:18002"}'
+curl http://127.0.0.1:8000/admin/upstreams
+curl -X DELETE http://127.0.0.1:8000/admin/upstreams/qwen3-vl-2b
+```
+
+在代码中可以用 `Server::registerUpstream()` 注册上游。详见 [UPSTREAM_GATEWAY.md](UPSTREAM_GATEWAY.md)。
+
 ## 目录结构
 
 ```
@@ -346,6 +364,7 @@ openai-api/
 │   ├── server.hpp          # 主入口
 │   ├── types.hpp           # 请求/响应类型
 │   ├── router.hpp          # 模型路由
+│   ├── upstream.hpp        # 上游透传（统一网关）
 │   ├── core/               # 核心组件
 │   │   ├── output_chunk.hpp
 │   │   └── data_provider.hpp
@@ -353,7 +372,9 @@ openai-api/
 │       └── encoder.hpp
 ├── src/                    # 实现
 │   ├── server.cpp
-│   └── router.cpp
+│   ├── router.cpp
+│   ├── upstream.cpp
+│   └── gateway_main.cpp    # openai_api_gateway 统一网关
 ├── examples/               # 使用示例
 │   ├── qwen_server/        # Qwen 服务示例
 │   └── whisper_sensevoice/ # 多 ASR 示例

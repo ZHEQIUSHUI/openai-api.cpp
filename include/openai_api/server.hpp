@@ -40,6 +40,7 @@
 
 #include "types.hpp"
 #include "router.hpp"
+#include "upstream.hpp"
 #include "openai_api/core/data_provider.hpp"
 #include "encoder/encoder.hpp"
 #include "utils/httplib.h"
@@ -65,6 +66,13 @@ struct ServerOptions {
     std::string api_key;  // 空表示不启用认证
     std::string worker_id;  // Worker ID（集群模式下使用，留空自动生成）
     std::string owner = "openai-api";  // 模型列表中显示的拥有者名称
+
+    // 上游透传 / 统一网关
+    bool admin_api = false;            // 是否启用 /admin/upstreams 管理接口
+    std::string admin_key;             // 管理接口 key（Authorization: Bearer <key>），空表示不校验
+    bool admin_allow_remote = false;   // 是否允许非本机访问管理接口（开启时建议同时设置 admin_key）
+    std::chrono::milliseconds upstream_health_interval{5000};  // 上游健康检查间隔，0 表示关闭
+    int thread_pool_size = 0;          // HTTP 工作线程数，0 使用 httplib 默认值；每个流式连接占用一个线程
 };
 
 /**
@@ -160,9 +168,40 @@ public:
     bool hasModel(const std::string& model_name) const;
     
     /**
-     * 卸载模型
+     * 卸载模型（同时移除同名上游）
      */
     void unregisterModel(const std::string& model_name);
+
+    // ============ 上游透传 ============
+
+    /**
+     * 注册（或替换）上游：该模型名的请求原样转发到 options.base_url，
+     * 响应（含 SSE 流式）原样转回。上游优先于同名的本地模型。
+     * base_url 不合法时抛出 std::invalid_argument。
+     */
+    void registerUpstream(const std::string& model_name, UpstreamOptions options);
+
+    /**
+     * 注销上游，不存在时返回 false
+     */
+    bool unregisterUpstream(const std::string& model_name);
+
+    /**
+     * 上游列表（含健康状态和最近一次调用统计）
+     */
+    std::vector<UpstreamInfo> listUpstreams() const;
+
+    /**
+     * 上游注册表变化时回调（可用于持久化）
+     */
+    void setUpstreamChangedCallback(std::function<void()> callback);
+
+    /**
+     * 启用 /admin/upstreams 管理接口
+     * @param admin_key 管理接口 key，空表示不校验
+     * @param allow_remote 是否允许非本机访问
+     */
+    void setAdminApi(bool enabled, const std::string& admin_key = "", bool allow_remote = false);
     
     // ============ 运行控制 ============
     
@@ -205,6 +244,7 @@ public:
 private:
     void setupRoutes();
     bool verifyApiKey(const httplib::Request& req) const;
+    bool verifyAdmin(const httplib::Request& req, httplib::Response& res) const;
     
     // 端点处理函数
     void handleHealth(const httplib::Request& req, httplib::Response& res);
@@ -221,6 +261,12 @@ private:
     void handleSpeech(const httplib::Request& req, httplib::Response& res);
     void handleImageGenerations(const httplib::Request& req, httplib::Response& res);
     void handleImageEdits(const httplib::Request& req, httplib::Response& res);
+    // 只支持上游透传的端点（如 /v1/completions）
+    void handleUpstreamOnly(const httplib::Request& req, httplib::Response& res);
+    // 管理接口
+    void handleAdminListUpstreams(const httplib::Request& req, httplib::Response& res);
+    void handleAdminAddUpstream(const httplib::Request& req, httplib::Response& res);
+    void handleAdminRemoveUpstream(const httplib::Request& req, httplib::Response& res);
     
     // 并发控制
     bool acquireSlot();
@@ -229,6 +275,7 @@ private:
 private:
     ServerOptions options_;
     ModelRouter router_;
+    UpstreamManager upstreams_;
     httplib::Server http_server_;
     std::string image_generation_output_dir_;
     

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <regex>
 #include <functional>
+#include <algorithm>
 
 namespace openai_api {
 
@@ -78,11 +79,18 @@ void Server::registerImageGeneration(const std::string& model_name, ImageGenCall
 // ============ 模型管理 ============
 
 std::vector<std::string> Server::listModels() const {
-    return router_.listAllModels();
+    auto models = router_.listAllModels();
+    for (const auto& name : upstreams_.names()) {
+        if (std::find(models.begin(), models.end(), name) == models.end()) {
+            models.push_back(name);
+        }
+    }
+    return models;
 }
 
 bool Server::hasModel(const std::string& model_name) const {
-    return router_.hasChatModel(model_name) ||
+    return upstreams_.has(model_name) ||
+           router_.hasChatModel(model_name) ||
            router_.hasEmbeddingModel(model_name) ||
            router_.hasASRModel(model_name) ||
            router_.hasTTSModel(model_name) ||
@@ -96,6 +104,31 @@ void Server::unregisterModel(const std::string& model_name) {
     router_.unregisterTTS(model_name);
     router_.unregisterImageGeneration(model_name);
     router_.setModelExtraFields(model_name, nullptr);
+    upstreams_.remove(model_name);
+}
+
+// ============ 上游透传 ============
+
+void Server::registerUpstream(const std::string& model_name, UpstreamOptions options) {
+    upstreams_.add(model_name, std::move(options));
+}
+
+bool Server::unregisterUpstream(const std::string& model_name) {
+    return upstreams_.remove(model_name);
+}
+
+std::vector<UpstreamInfo> Server::listUpstreams() const {
+    return upstreams_.list();
+}
+
+void Server::setUpstreamChangedCallback(std::function<void()> callback) {
+    upstreams_.setOnChange(std::move(callback));
+}
+
+void Server::setAdminApi(bool enabled, const std::string& admin_key, bool allow_remote) {
+    options_.admin_api = enabled;
+    options_.admin_key = admin_key;
+    options_.admin_allow_remote = allow_remote;
 }
 
 // ============ 运行控制 ============
@@ -128,6 +161,12 @@ void Server::run(const ServerOptions& options) {
         http_server_.set_mount_point("/images/generated", image_generation_output_dir_);
     }
 
+    if (options_.thread_pool_size > 0) {
+        const auto n = static_cast<size_t>(options_.thread_pool_size);
+        http_server_.new_task_queue = [n] { return new httplib::ThreadPool(n); };
+    }
+    upstreams_.startHealthCheck(options_.upstream_health_interval);
+
     http_server_.listen(options_.host.c_str(), options_.port);
 }
 
@@ -142,6 +181,7 @@ std::thread Server::runAsync(const ServerOptions& options) {
 void Server::stop() {
     running_ = false;
     http_server_.stop();
+    upstreams_.stopHealthCheck();
 }
 
 bool Server::isRunning() const {
@@ -188,6 +228,29 @@ bool Server::verifyApiKey(const httplib::Request& req) const {
     }
     
     return auth_header == options_.api_key;
+}
+
+bool Server::verifyAdmin(const httplib::Request& req, httplib::Response& res) const {
+    if (!options_.admin_api) {
+        res.status = 404;
+        res.set_content(ErrorEncoder::not_found(), "application/json");
+        return false;
+    }
+    const auto& addr = req.remote_addr;
+    const bool local = addr == "127.0.0.1" || addr == "::1" || addr == "::ffff:127.0.0.1";
+    if (!local && !options_.admin_allow_remote) {
+        res.status = 403;
+        res.set_content(ErrorEncoder::encode("forbidden", "Admin API is only available from localhost", 403),
+                        "application/json");
+        return false;
+    }
+    if (!options_.admin_key.empty() &&
+        req.get_header_value("Authorization") != "Bearer " + options_.admin_key) {
+        res.status = 401;
+        res.set_content(ErrorEncoder::encode("unauthorized", "Invalid admin key", 401), "application/json");
+        return false;
+    }
+    return true;
 }
 
 // ============ 路由设置 ============
@@ -264,10 +327,29 @@ void Server::setupRoutes() {
         handleImageEdits(req, res);
     });
     
+    // 只支持上游透传的端点
+    http_server_.Post("/v1/completions", [this](const httplib::Request& req, httplib::Response& res) {
+        handleUpstreamOnly(req, res);
+    });
+    http_server_.Post("/completions", [this](const httplib::Request& req, httplib::Response& res) {
+        handleUpstreamOnly(req, res);
+    });
+
+    // 上游管理接口（默认关闭，见 ServerOptions::admin_api）
+    http_server_.Get("/admin/upstreams", [this](const httplib::Request& req, httplib::Response& res) {
+        handleAdminListUpstreams(req, res);
+    });
+    http_server_.Post("/admin/upstreams", [this](const httplib::Request& req, httplib::Response& res) {
+        handleAdminAddUpstream(req, res);
+    });
+    http_server_.Delete("/admin/upstreams/(.+)", [this](const httplib::Request& req, httplib::Response& res) {
+        handleAdminRemoveUpstream(req, res);
+    });
+
     // CORS
     http_server_.Options("/.*", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
-        res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
         res.status = 200;
     });
@@ -288,9 +370,10 @@ void Server::handleModels(const httplib::Request& req, httplib::Response& res) {
     j["object"] = "list";
     j["data"] = nlohmann::json::array();
     
-    auto models = listModels();
+    auto models = router_.listAllModels();
     auto now = std::time(nullptr);
     for (const auto& model_name : models) {
+        if (upstreams_.has(model_name)) continue;  // 同名上游优先
         nlohmann::json model_j;
         model_j["id"] = model_name;
         model_j["object"] = "model";
@@ -316,6 +399,18 @@ void Server::handleModels(const httplib::Request& req, httplib::Response& res) {
         }
         j["data"].push_back(model_j);
     }
+
+    // 上游模型：不健康的不列出
+    for (const auto& model_name : upstreams_.names()) {
+        auto fields = upstreams_.listedModelFields(model_name);
+        if (!fields) continue;
+        nlohmann::json model_j = *fields;
+        model_j["id"] = model_name;
+        model_j["object"] = "model";
+        model_j["created"] = now;
+        model_j["owned_by"] = options_.owner;
+        j["data"].push_back(model_j);
+    }
     
     res.set_content(j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
 }
@@ -327,6 +422,9 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
         return;
     }
+
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
     
     // 并发控制
     if (!acquireSlot()) {
@@ -499,6 +597,9 @@ void Server::handleEmbeddings(const httplib::Request& req, httplib::Response& re
         res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
         return;
     }
+
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
     
     if (!acquireSlot()) {
         res.status = 503;
@@ -692,6 +793,9 @@ void Server::handleLlamaEmbedding(const httplib::Request& req, httplib::Response
         return;
     }
 
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
+
     if (!acquireSlot()) {
         res.status = 503;
         res.set_content(ErrorEncoder::rate_limit(), "application/json");
@@ -811,6 +915,9 @@ void Server::handleLlamaEmbeddings(const httplib::Request& req, httplib::Respons
         return;
     }
 
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
+
     if (!acquireSlot()) {
         res.status = 503;
         res.set_content(ErrorEncoder::rate_limit(), "application/json");
@@ -917,6 +1024,9 @@ void Server::handleTranscriptions(const httplib::Request& req, httplib::Response
         res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
         return;
     }
+
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
     
     if (!acquireSlot()) {
         res.status = 503;
@@ -1020,6 +1130,9 @@ void Server::handleTranslations(const httplib::Request& req, httplib::Response& 
         res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
         return;
     }
+
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
     
     if (!acquireSlot()) {
         res.status = 503;
@@ -1123,6 +1236,9 @@ void Server::handleSpeech(const httplib::Request& req, httplib::Response& res) {
         res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
         return;
     }
+
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
     
     if (!acquireSlot()) {
         res.status = 503;
@@ -1197,6 +1313,9 @@ void Server::handleImageGenerations(const httplib::Request& req, httplib::Respon
         res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
         return;
     }
+
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
     
     if (!acquireSlot()) {
         res.status = 503;
@@ -1281,6 +1400,9 @@ void Server::handleImageEdits(const httplib::Request& req, httplib::Response& re
         res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
         return;
     }
+
+    // 已注册为上游的模型：原样转发
+    if (upstreams_.tryProxy(req, res)) return;
 
     if (!acquireSlot()) {
         res.status = 503;
@@ -1421,6 +1543,71 @@ void Server::handleImageEdits(const httplib::Request& req, httplib::Response& re
 
     ImagesJSONEncoder encoder;
     res.set_content(encoder.encode(chunk.value()), "application/json");
+}
+
+void Server::handleUpstreamOnly(const httplib::Request& req, httplib::Response& res) {
+    if (!verifyApiKey(req)) {
+        res.status = 401;
+        res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
+        return;
+    }
+    if (upstreams_.tryProxy(req, res)) return;
+    res.status = 404;
+    res.set_content(ErrorEncoder::invalid_request("Model is not available on this endpoint"), "application/json");
+}
+
+// ============ 管理接口 ============
+
+void Server::handleAdminListUpstreams(const httplib::Request& req, httplib::Response& res) {
+    if (!verifyAdmin(req, res)) return;
+    nlohmann::json j;
+    j["object"] = "list";
+    j["data"] = nlohmann::json::array();
+    for (const auto& info : upstreams_.list()) {
+        j["data"].push_back(info.to_json());
+    }
+    res.set_content(j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+}
+
+void Server::handleAdminAddUpstream(const httplib::Request& req, httplib::Response& res) {
+    if (!verifyAdmin(req, res)) return;
+    auto j = nlohmann::json::parse(req.body, nullptr, false);
+    if (!j.is_object() || !j.contains("model") || !j["model"].is_string() ||
+        !j.contains("base_url") || !j["base_url"].is_string()) {
+        res.status = 400;
+        res.set_content(ErrorEncoder::invalid_request("Body must be a JSON object with 'model' and 'base_url'"),
+                        "application/json");
+        return;
+    }
+    const auto model = j["model"].get<std::string>();
+    try {
+        upstreams_.add(model, UpstreamOptions::from_json(j));
+    } catch (const std::exception& e) {
+        res.status = 400;
+        res.set_content(ErrorEncoder::invalid_request(e.what()), "application/json");
+        return;
+    }
+    for (const auto& info : upstreams_.list()) {
+        if (info.model == model) {
+            res.set_content(info.to_json().dump(2), "application/json");
+            return;
+        }
+    }
+}
+
+void Server::handleAdminRemoveUpstream(const httplib::Request& req, httplib::Response& res) {
+    if (!verifyAdmin(req, res)) return;
+    const auto model = req.matches[1].str();  // httplib 已对 path 做过解码
+    if (!upstreams_.remove(model)) {
+        res.status = 404;
+        res.set_content(ErrorEncoder::invalid_request("Upstream '" + model + "' is not registered"),
+                        "application/json");
+        return;
+    }
+    nlohmann::json j;
+    j["model"] = model;
+    j["deleted"] = true;
+    res.set_content(j.dump(2), "application/json");
 }
 
 } // namespace openai_api

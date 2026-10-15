@@ -9,6 +9,13 @@ option(OPENAI_API_BUILD_EXAMPLES "Build openai-api.cpp examples" ON)
 option(OPENAI_API_BUILD_TESTS "Build openai-api.cpp tests" ON)
 option(OPENAI_API_BUILD_SHARED "Build openai-api.cpp as shared library" OFF)
 option(OPENAI_API_BUILD_SERVER "Build openai_api_server executable" ON)
+# 作为子项目引入时（如 add_subdirectory）默认不编译网关
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(OPENAI_API_GATEWAY_DEFAULT ON)
+else()
+    set(OPENAI_API_GATEWAY_DEFAULT OFF)
+endif()
+option(OPENAI_API_BUILD_GATEWAY "Build openai_api_gateway executable" ${OPENAI_API_GATEWAY_DEFAULT})
 
 # 包含目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -21,6 +28,7 @@ if(OPENAI_API_BUILD_SHARED)
     add_library(openai_api SHARED
         src/server.cpp
         src/router.cpp
+        src/upstream.cpp
         src/cluster/remote_worker_provider.cpp
         src/cluster/worker_manager.cpp
         src/cluster/worker_client.cpp
@@ -39,6 +47,7 @@ else()
     add_library(openai_api STATIC
         src/server.cpp
         src/router.cpp
+        src/upstream.cpp
         src/cluster/remote_worker_provider.cpp
         src/cluster/worker_manager.cpp
         src/cluster/worker_client.cpp
@@ -71,6 +80,11 @@ if(OPENAI_API_BUILD_SERVER)
     target_link_libraries(openai_api_server PRIVATE openai_api Threads::Threads)
 endif()
 
+if(OPENAI_API_BUILD_GATEWAY)
+    add_executable(openai_api_gateway src/gateway_main.cpp)
+    target_link_libraries(openai_api_gateway PRIVATE openai_api Threads::Threads)
+endif()
+
 # ============ 测试 ============
 if(OPENAI_API_BUILD_TESTS)
     enable_testing()
@@ -94,6 +108,10 @@ if(OPENAI_API_BUILD_TESTS)
     add_executable(openai_api_test_cluster_full tests/test_cluster_full.cpp)
     target_link_libraries(openai_api_test_cluster_full PRIVATE openai_api)
     add_test(NAME openai_api_cluster_full_test COMMAND openai_api_test_cluster_full)
+
+    add_executable(openai_api_test_upstream tests/test_upstream.cpp)
+    target_link_libraries(openai_api_test_upstream PRIVATE openai_api)
+    add_test(NAME openai_api_upstream_test COMMAND openai_api_test_upstream)
 endif()
 
 # ============ 示例 ============
@@ -108,6 +126,9 @@ include(GNUInstallDirs)
 set(OPENAI_API_INSTALL_TARGETS openai_api)
 if(OPENAI_API_BUILD_SERVER)
     list(APPEND OPENAI_API_INSTALL_TARGETS openai_api_server)
+endif()
+if(OPENAI_API_BUILD_GATEWAY)
+    list(APPEND OPENAI_API_INSTALL_TARGETS openai_api_gateway)
 endif()
 
 install(TARGETS ${OPENAI_API_INSTALL_TARGETS}
@@ -156,5 +177,6 @@ message(STATUS "  Version: ${PROJECT_VERSION}")
 message(STATUS "  Build examples: ${OPENAI_API_BUILD_EXAMPLES}")
 message(STATUS "  Build tests: ${OPENAI_API_BUILD_TESTS}")
 message(STATUS "  Build server: ${OPENAI_API_BUILD_SERVER}")
+message(STATUS "  Build gateway: ${OPENAI_API_BUILD_GATEWAY}")
 message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "")
