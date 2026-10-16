@@ -96,6 +96,11 @@ struct ChatRequest {
     int64_t seed = 0;
     // stream_options.include_usage: send usage in a final chunk with empty choices
     bool include_usage = false;
+    // Legacy /v1/completions request routed to the chat callback: `prompt` is raw text that the
+    // model continues without a chat template; `echo` prepends it to the returned text.
+    bool is_completion = false;
+    std::string prompt;
+    bool echo = false;
     
     // 原始 JSON（供扩展用）
     nlohmann::json raw;
