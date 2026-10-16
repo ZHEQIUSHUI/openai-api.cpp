@@ -235,6 +235,14 @@ public:
      * 停止服务器
      */
     void stop();
+
+    /**
+     * Extra JSON endpoint (e.g. /tokenize, /version). The handler gets the parsed request body
+     * ({} for GET) and fills the response JSON; its return value is the HTTP status.
+     * API-key checks apply as for the built-in routes. Register before run().
+     */
+    using JsonHandler = std::function<int(const nlohmann::json& body, nlohmann::json& out)>;
+    void addJsonRoute(const std::string& method, const std::string& path, JsonHandler handler);
     
     /**
      * 检查服务器是否正在运行
@@ -250,6 +258,11 @@ private:
     void handleHealth(const httplib::Request& req, httplib::Response& res);
     void handleModels(const httplib::Request& req, httplib::Response& res);
     void handleChatCompletions(const httplib::Request& req, httplib::Response& res);
+    void handleCompletions(const httplib::Request& req, httplib::Response& res);
+    // Shared by /v1/chat/completions and the legacy /v1/completions (completion = true).
+    void handleGeneration(const httplib::Request& req, httplib::Response& res, bool completion);
+    void handleMetrics(const httplib::Request& req, httplib::Response& res);
+    void countUsage(const OutputChunk& chunk);
     void handleEmbeddings(const httplib::Request& req, httplib::Response& res);
     // llama.cpp compatibility endpoints:
     // - POST /embedding
@@ -281,6 +294,14 @@ private:
     
     std::atomic<bool> running_{false};
     std::atomic<int> current_concurrency_{0};
+    // /metrics counters (vLLM metric names)
+    std::atomic<int> waiting_requests_{0};
+    std::atomic<uint64_t> prompt_tokens_total_{0};
+    std::atomic<uint64_t> generation_tokens_total_{0};
+    std::atomic<uint64_t> requests_ok_stop_{0};
+    std::atomic<uint64_t> requests_ok_length_{0};
+    std::atomic<uint64_t> requests_ok_tool_calls_{0};
+    std::atomic<uint64_t> requests_failed_{0};
     std::mutex slot_mutex_;
     std::condition_variable slot_cv_;
 };

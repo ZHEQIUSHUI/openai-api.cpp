@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <random>
+#include <ctime>
 
 namespace openai_api {
 
@@ -31,6 +32,22 @@ inline std::string json_dump_utf8_safe(const nlohmann::json& j,
         err["error"]["code"] = "server_error";
         return err.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
     }
+}
+
+inline nlohmann::json usage_json(const OutputChunk& chunk) {
+    nlohmann::json u;
+    u["prompt_tokens"] = chunk.usage.prompt_tokens;
+    u["completion_tokens"] = chunk.usage.completion_tokens;
+    u["total_tokens"] = chunk.usage.total_tokens;
+    if (chunk.usage.ttft_ms >= 0.0f) u["ttft_ms"] = chunk.usage.ttft_ms;
+    if (chunk.usage.decode_tps > 0.0f) u["decode_tps"] = chunk.usage.decode_tps;
+    if (chunk.usage.prefill_tps > 0.0f) u["prefill_tps"] = chunk.usage.prefill_tps;
+    if (chunk.usage.prefill_tokens >= 0) u["prefill_tokens"] = chunk.usage.prefill_tokens;
+    return u;
+}
+
+inline nlohmann::json finish_reason_of(const OutputChunk& chunk) {
+    return chunk.obj.contains("finish_reason") ? chunk.obj["finish_reason"] : nlohmann::json("stop");
 }
 } // namespace detail
 
@@ -77,6 +94,10 @@ protected:
  */
 class ChatCompletionsSSEEncoder : public Encoder {
 public:
+    // stream_options.include_usage: usage goes into one extra chunk with empty choices (OpenAI
+    // rule) instead of riding on the finish chunk.
+    explicit ChatCompletionsSSEEncoder(bool include_usage = false) : include_usage_(include_usage) {}
+
     std::string encode(const OutputChunk& chunk) override {
         nlohmann::json data;
         
@@ -86,6 +107,13 @@ public:
                 break;
             case OutputChunkType::FinalText:
                 data = create_sse_finish(chunk);
+                if (include_usage_) {
+                    nlohmann::json usage_chunk = data;
+                    data.erase("usage");
+                    usage_chunk["choices"] = nlohmann::json::array();
+                    return "data: " + detail::json_dump_utf8_safe(data) + "\n\n" +
+                           "data: " + detail::json_dump_utf8_safe(usage_chunk) + "\n\n";
+                }
                 break;
             case OutputChunkType::Error:
                 data = create_sse_error(chunk);
@@ -104,17 +132,37 @@ public:
     }
 
 private:
+    bool include_usage_ = false;
+    bool sent_role_ = false;
+    std::string stream_id_;
+    std::time_t stream_created_ = 0;
+
+    // All chunks of one stream share id and created, as OpenAI's do.
+    void stamp(nlohmann::json& j, const OutputChunk& chunk) {
+        if (stream_id_.empty()) {
+            stream_id_ = chunk.id.empty() ? generate_id() : chunk.id;
+            stream_created_ = chunk.created ? chunk.created : std::time(nullptr);
+        }
+        j["id"] = stream_id_;
+        j["object"] = "chat.completion.chunk";
+        j["created"] = stream_created_;
+    }
+
     nlohmann::json create_sse_delta(const OutputChunk& chunk) {
         nlohmann::json j;
-        j["id"] = chunk.id.empty() ? generate_id() : chunk.id;
-        j["object"] = "chat.completion.chunk";
-        j["created"] = chunk.created ? chunk.created : std::time(nullptr);
+        stamp(j, chunk);
         j["model"] = chunk.model.empty() ? "gpt-4" : chunk.model;
         
         nlohmann::json choice;
         choice["index"] = chunk.index;
-        choice["delta"]["role"] = "assistant";
-        if (chunk.obj.contains("tool_calls") && chunk.obj["tool_calls"].is_array() && !chunk.obj["tool_calls"].empty()) {
+        choice["delta"] = nlohmann::json::object();
+        if (!sent_role_) {
+            choice["delta"]["role"] = "assistant"; // only the first delta carries the role
+            sent_role_ = true;
+        }
+        if (chunk.obj.contains("reasoning_content")) {
+            choice["delta"]["reasoning_content"] = chunk.obj["reasoning_content"];
+        } else if (chunk.obj.contains("tool_calls") && chunk.obj["tool_calls"].is_array() && !chunk.obj["tool_calls"].empty()) {
             nlohmann::json tcs = chunk.obj["tool_calls"];
             for (size_t k = 0; k < tcs.size(); ++k) if (!tcs[k].contains("index")) tcs[k]["index"] = (int)k; // OpenAI streaming needs index
             choice["delta"]["tool_calls"] = tcs;
@@ -129,9 +177,7 @@ private:
     
     nlohmann::json create_sse_finish(const OutputChunk& chunk) {
         nlohmann::json j;
-        j["id"] = chunk.id.empty() ? generate_id() : chunk.id;
-        j["object"] = "chat.completion.chunk";
-        j["created"] = chunk.created ? chunk.created : std::time(nullptr);
+        stamp(j, chunk);
         j["model"] = chunk.model.empty() ? "gpt-4" : chunk.model;
 
         nlohmann::json choice;
@@ -192,12 +238,17 @@ public:
         // Native tool calling: if the producer attached tool_calls to the chunk, emit an
         // OpenAI tool_calls message (finish_reason "tool_calls") instead of a text message.
         if (chunk.obj.contains("tool_calls") && chunk.obj["tool_calls"].is_array() && !chunk.obj["tool_calls"].empty()) {
-            choice["message"]["content"] = nullptr;
+            // text the model wrote before its calls stays in content (null when there is none)
+            choice["message"]["content"] = chunk.text.empty() ? nlohmann::json(nullptr) : nlohmann::json(chunk.text);
             choice["message"]["tool_calls"] = chunk.obj["tool_calls"];
+            if (chunk.obj.contains("reasoning_content"))
+                choice["message"]["reasoning_content"] = chunk.obj["reasoning_content"];
             choice["finish_reason"] = "tool_calls";
         } else {
             choice["message"]["content"] = chunk.text;
-            choice["finish_reason"] = "stop";
+            if (chunk.obj.contains("reasoning_content"))
+                choice["message"]["reasoning_content"] = chunk.obj["reasoning_content"];
+            choice["finish_reason"] = chunk.obj.contains("finish_reason") ? chunk.obj["finish_reason"] : nlohmann::json("stop");
         }
         
         j["choices"] = nlohmann::json::array({choice});
@@ -220,6 +271,91 @@ public:
 
         return detail::json_dump_utf8_safe(j, 2);
     }
+};
+
+/**
+ * Legacy text completions (/v1/completions), non-streaming: object "text_completion".
+ */
+class CompletionsJSONEncoder : public Encoder {
+public:
+    std::string encode(const OutputChunk& chunk) override {
+        if (chunk.type == OutputChunkType::Error) {
+            nlohmann::json err;
+            err["error"]["message"] = chunk.error_message;
+            err["error"]["type"] = chunk.error_code;
+            err["error"]["code"] = chunk.error_code;
+            return detail::json_dump_utf8_safe(err, 2);
+        }
+        nlohmann::json j;
+        j["id"] = chunk.id.empty() ? generate_id("cmpl") : chunk.id;
+        j["object"] = "text_completion";
+        j["created"] = chunk.created ? chunk.created : std::time(nullptr);
+        j["model"] = chunk.model;
+        j["choices"] = nlohmann::json::array({{
+            {"index", chunk.index},
+            {"text", chunk.text},
+            {"logprobs", nullptr},
+            {"finish_reason", detail::finish_reason_of(chunk)},
+        }});
+        j["usage"] = detail::usage_json(chunk);
+        return detail::json_dump_utf8_safe(j, 2);
+    }
+};
+
+/**
+ * Legacy text completions (/v1/completions), streaming.
+ */
+class CompletionsSSEEncoder : public Encoder {
+public:
+    explicit CompletionsSSEEncoder(bool include_usage = false) : include_usage_(include_usage) {}
+
+    std::string encode(const OutputChunk& chunk) override {
+        if (chunk.type == OutputChunkType::End) return "data: [DONE]\n\n";
+        if (chunk.type == OutputChunkType::Error) {
+            nlohmann::json err;
+            err["error"]["message"] = chunk.error_message;
+            err["error"]["type"] = chunk.error_code;
+            return "data: " + detail::json_dump_utf8_safe(err) + "\n\n";
+        }
+        if (chunk.type != OutputChunkType::TextDelta && chunk.type != OutputChunkType::FinalText) return "";
+        const bool final = chunk.type == OutputChunkType::FinalText;
+        nlohmann::json j = base(chunk);
+        j["choices"] = nlohmann::json::array({{
+            {"index", chunk.index},
+            {"text", chunk.text},
+            {"logprobs", nullptr},
+            {"finish_reason", final ? detail::finish_reason_of(chunk) : nlohmann::json(nullptr)},
+        }});
+        if (!final) return "data: " + detail::json_dump_utf8_safe(j) + "\n\n";
+        if (!include_usage_) {
+            j["usage"] = detail::usage_json(chunk);
+            return "data: " + detail::json_dump_utf8_safe(j) + "\n\n";
+        }
+        nlohmann::json usage_chunk = base(chunk);
+        usage_chunk["choices"] = nlohmann::json::array();
+        usage_chunk["usage"] = detail::usage_json(chunk);
+        return "data: " + detail::json_dump_utf8_safe(j) + "\n\n" +
+               "data: " + detail::json_dump_utf8_safe(usage_chunk) + "\n\n";
+    }
+
+    std::string done_marker() const override { return "data: [DONE]\n\n"; }
+
+private:
+    nlohmann::json base(const OutputChunk& chunk) {
+        if (id_.empty()) {
+            id_ = chunk.id.empty() ? generate_id("cmpl") : chunk.id;
+            created_ = chunk.created ? chunk.created : std::time(nullptr);
+        }
+        nlohmann::json j;
+        j["id"] = id_;
+        j["object"] = "text_completion";
+        j["created"] = created_;
+        j["model"] = chunk.model;
+        return j;
+    }
+    bool include_usage_ = false;
+    std::string id_;
+    std::time_t created_ = 0;
 };
 
 /**

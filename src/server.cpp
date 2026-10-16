@@ -192,9 +192,11 @@ bool Server::isRunning() const {
 
 bool Server::acquireSlot() {
     std::unique_lock<std::mutex> lock(slot_mutex_);
+    ++waiting_requests_;
     bool acquired = slot_cv_.wait_for(lock, options_.wait_timeout, [this] {
         return current_concurrency_.load() < options_.max_concurrency;
     });
+    --waiting_requests_;
     if (acquired) {
         current_concurrency_++;
     }
@@ -270,6 +272,15 @@ void Server::setupRoutes() {
     });
     
     // Chat Completions
+    http_server_.Post("/v1/completions", [this](const httplib::Request& req, httplib::Response& res) {
+        handleCompletions(req, res);
+    });
+    http_server_.Post("/completions", [this](const httplib::Request& req, httplib::Response& res) {
+        handleCompletions(req, res);
+    });
+    http_server_.Get("/metrics", [this](const httplib::Request& req, httplib::Response& res) {
+        handleMetrics(req, res);
+    });
     http_server_.Post("/v1/chat/completions", [this](const httplib::Request& req, httplib::Response& res) {
         handleChatCompletions(req, res);
     });
@@ -379,12 +390,14 @@ void Server::handleModels(const httplib::Request& req, httplib::Response& res) {
         model_j["object"] = "model";
         model_j["created"] = now;
         model_j["owned_by"] = options_.owner;
-        if (auto supports_vision = router_.chatModelSupportsVision(model_name);
-            supports_vision.has_value()) {
-            model_j["capabilities"]["vision"] = supports_vision.value();
-            model_j["input_modalities"] = supports_vision.value()
-                ? nlohmann::json::array({"text", "image"})
-                : nlohmann::json::array({"text"});
+        if (auto modalities = router_.chatModelInputModalities(model_name); modalities.has_value()) {
+            auto has = [&](const char* m) {
+                return std::find(modalities->begin(), modalities->end(), m) != modalities->end();
+            };
+            model_j["capabilities"]["vision"] = has("image");
+            model_j["capabilities"]["video"] = has("video");
+            model_j["capabilities"]["audio"] = has("audio");
+            model_j["input_modalities"] = *modalities;
         }
         auto extra_fields = router_.modelExtraFields(model_name);
         if (extra_fields.is_object()) {
@@ -416,6 +429,86 @@ void Server::handleModels(const httplib::Request& req, httplib::Response& res) {
 }
 
 void Server::handleChatCompletions(const httplib::Request& req, httplib::Response& res) {
+    handleGeneration(req, res, false);
+}
+
+void Server::handleCompletions(const httplib::Request& req, httplib::Response& res) {
+    handleGeneration(req, res, true);
+}
+
+void Server::countUsage(const OutputChunk& chunk) {
+    if (chunk.type == OutputChunkType::Error) { ++requests_failed_; return; }
+    if (chunk.type != OutputChunkType::FinalText) return;
+    prompt_tokens_total_ += (uint64_t)std::max(0, chunk.usage.prompt_tokens);
+    generation_tokens_total_ += (uint64_t)std::max(0, chunk.usage.completion_tokens);
+    const std::string reason = chunk.obj.contains("tool_calls") ? "tool_calls"
+                             : (chunk.obj.contains("finish_reason") && chunk.obj["finish_reason"].is_string()
+                                    ? chunk.obj["finish_reason"].get<std::string>() : "stop");
+    if (reason == "length") ++requests_ok_length_;
+    else if (reason == "tool_calls") ++requests_ok_tool_calls_;
+    else ++requests_ok_stop_;
+}
+
+void Server::handleMetrics(const httplib::Request& req, httplib::Response& res) {
+    // Prometheus text format with vLLM metric names, so existing vLLM dashboards work.
+    const auto models = router_.listChatModels();
+    const std::string label = "{model_name=\"" + (models.empty() ? std::string() : models.front()) + "\"}";
+    std::ostringstream o;
+    o << "# HELP vllm:num_requests_running Number of requests currently running.\n"
+      << "# TYPE vllm:num_requests_running gauge\n"
+      << "vllm:num_requests_running" << label << " " << current_concurrency_.load() << "\n"
+      << "# HELP vllm:num_requests_waiting Number of requests waiting for a slot.\n"
+      << "# TYPE vllm:num_requests_waiting gauge\n"
+      << "vllm:num_requests_waiting" << label << " " << waiting_requests_.load() << "\n"
+      << "# HELP vllm:prompt_tokens_total Number of prefill tokens processed.\n"
+      << "# TYPE vllm:prompt_tokens_total counter\n"
+      << "vllm:prompt_tokens_total" << label << " " << prompt_tokens_total_.load() << "\n"
+      << "# HELP vllm:generation_tokens_total Number of generation tokens processed.\n"
+      << "# TYPE vllm:generation_tokens_total counter\n"
+      << "vllm:generation_tokens_total" << label << " " << generation_tokens_total_.load() << "\n"
+      << "# HELP vllm:request_success_total Count of successfully processed requests.\n"
+      << "# TYPE vllm:request_success_total counter\n";
+    const std::string base = label.substr(0, label.size() - 1);
+    o << "vllm:request_success_total" << base << ",finished_reason=\"stop\"} " << requests_ok_stop_.load() << "\n"
+      << "vllm:request_success_total" << base << ",finished_reason=\"length\"} " << requests_ok_length_.load() << "\n"
+      << "vllm:request_success_total" << base << ",finished_reason=\"tool_calls\"} " << requests_ok_tool_calls_.load() << "\n"
+      << "# HELP axllm:request_failed_total Requests that ended with an error.\n"
+      << "# TYPE axllm:request_failed_total counter\n"
+      << "axllm:request_failed_total" << label << " " << requests_failed_.load() << "\n";
+    res.set_content(o.str(), "text/plain; version=0.0.4");
+}
+
+void Server::addJsonRoute(const std::string& method, const std::string& path, JsonHandler handler) {
+    auto wrapped = [this, handler](const httplib::Request& req, httplib::Response& res) {
+        if (!verifyApiKey(req)) {
+            res.status = 401;
+            res.set_content(ErrorEncoder::encode("unauthorized", "Invalid API key"), "application/json");
+            return;
+        }
+        nlohmann::json body = nlohmann::json::object();
+        if (!req.body.empty()) {
+            try { body = nlohmann::json::parse(req.body); }
+            catch (const std::exception& e) {
+                res.status = 400;
+                res.set_content(ErrorEncoder::invalid_request("Invalid JSON: " + std::string(e.what())), "application/json");
+                return;
+            }
+        }
+        nlohmann::json out = nlohmann::json::object();
+        int status = 200;
+        try { status = handler(body, out); }
+        catch (const std::exception& e) {
+            status = 400;
+            out = nlohmann::json::parse(ErrorEncoder::invalid_request(e.what()));
+        }
+        res.status = status;
+        res.set_content(detail::json_dump_utf8_safe(out, 2), "application/json");
+    };
+    if (method == "GET") http_server_.Get(path, wrapped);
+    else http_server_.Post(path, wrapped);
+}
+
+void Server::handleGeneration(const httplib::Request& req, httplib::Response& res, bool completion) {
     // API Key 验证
     if (!verifyApiKey(req)) {
         res.status = 401;
@@ -449,7 +542,31 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         return;
     }
     
-    auto request = ChatRequest::from_json(req_json);
+    ChatRequest request;
+    try {
+        request = ChatRequest::from_json(req_json);
+    } catch (const std::exception& e) {
+        res.status = 400;
+        res.set_content(ErrorEncoder::invalid_request("Invalid request: " + std::string(e.what())), "application/json");
+        return;
+    }
+    if (completion) {
+        request.is_completion = true;
+        const auto& p = req_json.contains("prompt") ? req_json["prompt"] : nlohmann::json();
+        if (p.is_string()) request.prompt = p.get<std::string>();
+        else if (p.is_array() && p.size() == 1 && p[0].is_string()) request.prompt = p[0].get<std::string>();
+        else {
+            res.status = 400;
+            res.set_content(ErrorEncoder::invalid_request("'prompt' must be a string (or an array with one string)"),
+                            "application/json");
+            return;
+        }
+        request.echo = req_json.value("echo", false);
+        if (!request.has_max_tokens) {
+            request.has_max_tokens = true;
+            request.max_tokens = 16; // OpenAI / vLLM default for completions
+        }
+    }
     if (request.model.empty()) {
         res.status = 400;
         res.set_content(ErrorEncoder::invalid_request("Missing 'model' field"), "application/json");
@@ -472,16 +589,22 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         return;
     }
 
-    if (request.has_image_inputs()) {
-        auto supports_vision = router_.chatModelSupportsVision(request.model);
-        if (supports_vision.has_value() && !supports_vision.value()) {
+    if (auto accepted = router_.chatModelInputModalities(request.model); accepted.has_value()) {
+        for (const auto& used : request.media_modalities()) {
+            if (std::find(accepted->begin(), accepted->end(), used) != accepted->end()) continue;
             res.status = 400;
             res.set_content(
                 ErrorEncoder::invalid_request(
-                    "Model '" + request.model + "' does not support image inputs"),
+                    "Model '" + request.model + "' does not support " + used + " inputs"),
                 "application/json");
             return;
         }
+    }
+    
+    if (request.n != 1) {
+        res.status = 400;
+        res.set_content(ErrorEncoder::invalid_request("Only n=1 is supported"), "application/json");
+        return;
     }
     
     // 创建 Provider 并路由
@@ -501,14 +624,18 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         
         // 使用 shared_ptr 管理状态，确保生命周期
         struct StreamState {
-            std::shared_ptr<BaseDataProvider> provider;
-            ChatCompletionsSSEEncoder encoder;
+            Server* server = nullptr;
+            std::shared_ptr<QueueProvider> provider;
+            std::unique_ptr<Encoder> encoder;
             std::chrono::steady_clock::time_point start;
             std::chrono::milliseconds timeout;
             std::atomic<bool> done{false};
         };
         auto state = std::make_shared<StreamState>();
         state->provider = provider;
+        state->server = this;
+        if (completion) state->encoder = std::make_unique<CompletionsSSEEncoder>(request.include_usage);
+        else state->encoder = std::make_unique<ChatCompletionsSSEEncoder>(request.include_usage);
         state->start = std::chrono::steady_clock::now();
         state->timeout = options_.default_timeout;
         
@@ -518,6 +645,12 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
             [state](size_t offset, httplib::DataSink& sink) -> bool {
                 if (state->done.load()) {
                     sink.done();  // 关闭连接
+                    return false;
+                }
+                if (!sink.is_writable()) {
+                    // client went away: tell the model callback so it can stop generating
+                    state->provider->disconnect();
+                    state->done = true;
                     return false;
                 }
                 
@@ -556,22 +689,32 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
                 }
                 
                 // 编码并写入数据
-                std::string encoded = state->encoder.encode(chunk.value());
+                state->server->countUsage(chunk.value());
+                std::string encoded = state->encoder->encode(chunk.value());
                 if (!encoded.empty()) {
                     sink.write(encoded.data(), encoded.size());
                 }
                 
                 return true;  // 继续等待
             },
-            [this](bool /*success*/) {
+            [this, state](bool success) {
+                if (!success) state->provider->disconnect();
                 this->releaseSlot();
             }
         );
         
         return;
     } else {
-        // 非流式响应
-        auto chunk = provider->wait_pop_for(options_.default_timeout);
+        // 非流式响应: wait in slices so a closed client connection stops the model early
+        std::optional<OutputChunk> chunk;
+        while (true) {
+            chunk = provider->wait_pop_for(std::chrono::milliseconds(200));
+            if (chunk.has_value() || provider->is_ended()) break;
+            if (req.is_connection_closed()) {
+                provider->disconnect();
+                return;
+            }
+        }
         if (!chunk.has_value()) {
             const bool ended = !provider->is_timed_out();
             res.status = ended ? 500 : 504;
@@ -579,15 +722,12 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
                             "application/json");
             return;
         }
-        if (chunk->is_error()) {
-            res.status = 400;
-            ChatCompletionsJSONEncoder encoder;
-            res.set_content(encoder.encode(chunk.value()), "application/json");
-            return;
-        }
-        
-        ChatCompletionsJSONEncoder encoder;
-        res.set_content(encoder.encode(chunk.value()), "application/json");
+        countUsage(chunk.value());
+        std::unique_ptr<Encoder> encoder;
+        if (completion) encoder = std::make_unique<CompletionsJSONEncoder>();
+        else encoder = std::make_unique<ChatCompletionsJSONEncoder>();
+        if (chunk->is_error()) res.status = 400;
+        res.set_content(encoder->encode(chunk.value()), "application/json");
     }
 }
 
