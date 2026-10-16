@@ -77,6 +77,7 @@ struct ChatRequest {
     bool enable_thinking = true;
     bool has_thinking_mode = false;
     std::string thinking_mode; // raw string ("think"/"no_think"/"default"); interpreted by the app
+    bool has_max_tokens = false; // max_tokens or max_completion_tokens was given
     int max_tokens = 2048;
     int n = 1;
     std::vector<std::string> stop;
@@ -171,8 +172,15 @@ struct ChatRequest {
             req.has_thinking_mode = true;
             req.thinking_mode = j["chat_template_kwargs"]["thinking_mode"].get<std::string>();
         }
-        if (j.contains("max_tokens")) req.max_tokens = j["max_tokens"].get<int>();
-        if (j.contains("n")) req.n = j["n"].get<int>();
+        // max_completion_tokens is the current OpenAI name; max_tokens the legacy one (vLLM takes both).
+        if (j.contains("max_completion_tokens") && j["max_completion_tokens"].is_number_integer()) {
+            req.has_max_tokens = true;
+            req.max_tokens = j["max_completion_tokens"].get<int>();
+        } else if (j.contains("max_tokens") && j["max_tokens"].is_number_integer()) {
+            req.has_max_tokens = true;
+            req.max_tokens = j["max_tokens"].get<int>();
+        }
+        if (j.contains("n") && j["n"].is_number_integer()) req.n = j["n"].get<int>();
         if (j.contains("presence_penalty")) { req.has_presence_penalty = true; req.presence_penalty = j["presence_penalty"].get<float>(); }
         if (j.contains("frequency_penalty")) { req.has_frequency_penalty = true; req.frequency_penalty = j["frequency_penalty"].get<float>(); }
         
@@ -345,7 +353,7 @@ struct ImageGenRequest {
         
         if (j.contains("prompt")) req.prompt = j["prompt"].get<std::string>();
         if (j.contains("model")) req.model = j["model"].get<std::string>();
-        if (j.contains("n")) req.n = j["n"].get<int>();
+        if (j.contains("n") && j["n"].is_number_integer()) req.n = j["n"].get<int>();
         if (j.contains("quality")) req.quality = j["quality"].get<std::string>();
         if (j.contains("response_format")) req.response_format = j["response_format"].get<std::string>();
         if (j.contains("size")) req.size = j["size"].get<std::string>();

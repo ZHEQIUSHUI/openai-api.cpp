@@ -197,7 +197,7 @@ public:
             choice["finish_reason"] = "tool_calls";
         } else {
             choice["message"]["content"] = chunk.text;
-            choice["finish_reason"] = "stop";
+            choice["finish_reason"] = chunk.obj.contains("finish_reason") ? chunk.obj["finish_reason"] : nlohmann::json("stop");
         }
         
         j["choices"] = nlohmann::json::array({choice});

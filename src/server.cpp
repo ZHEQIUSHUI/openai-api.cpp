@@ -486,6 +486,12 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         }
     }
     
+    if (request.n != 1) {
+        res.status = 400;
+        res.set_content(ErrorEncoder::invalid_request("Only n=1 is supported"), "application/json");
+        return;
+    }
+    
     // 创建 Provider 并路由
     auto provider = std::make_shared<QueueProvider>(options_.default_timeout);
     if (!router_.routeChat(request, provider)) {
@@ -503,7 +509,7 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         
         // 使用 shared_ptr 管理状态，确保生命周期
         struct StreamState {
-            std::shared_ptr<BaseDataProvider> provider;
+            std::shared_ptr<QueueProvider> provider;
             ChatCompletionsSSEEncoder encoder;
             std::chrono::steady_clock::time_point start;
             std::chrono::milliseconds timeout;
@@ -520,6 +526,12 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
             [state](size_t offset, httplib::DataSink& sink) -> bool {
                 if (state->done.load()) {
                     sink.done();  // 关闭连接
+                    return false;
+                }
+                if (!sink.is_writable()) {
+                    // client went away: tell the model callback so it can stop generating
+                    state->provider->disconnect();
+                    state->done = true;
                     return false;
                 }
                 
@@ -565,15 +577,24 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
                 
                 return true;  // 继续等待
             },
-            [this](bool /*success*/) {
+            [this, state](bool success) {
+                if (!success) state->provider->disconnect();
                 this->releaseSlot();
             }
         );
         
         return;
     } else {
-        // 非流式响应
-        auto chunk = provider->wait_pop_for(options_.default_timeout);
+        // 非流式响应: wait in slices so a closed client connection stops the model early
+        std::optional<OutputChunk> chunk;
+        while (true) {
+            chunk = provider->wait_pop_for(std::chrono::milliseconds(200));
+            if (chunk.has_value() || provider->is_ended()) break;
+            if (req.is_connection_closed()) {
+                provider->disconnect();
+                return;
+            }
+        }
         if (!chunk.has_value()) {
             const bool ended = !provider->is_timed_out();
             res.status = ended ? 500 : 504;
