@@ -451,7 +451,14 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         return;
     }
     
-    auto request = ChatRequest::from_json(req_json);
+    ChatRequest request;
+    try {
+        request = ChatRequest::from_json(req_json);
+    } catch (const std::exception& e) {
+        res.status = 400;
+        res.set_content(ErrorEncoder::invalid_request("Invalid request: " + std::string(e.what())), "application/json");
+        return;
+    }
     if (request.model.empty()) {
         res.status = 400;
         res.set_content(ErrorEncoder::invalid_request("Missing 'model' field"), "application/json");
@@ -517,6 +524,7 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         };
         auto state = std::make_shared<StreamState>();
         state->provider = provider;
+        state->encoder = ChatCompletionsSSEEncoder(request.include_usage);
         state->start = std::chrono::steady_clock::now();
         state->timeout = options_.default_timeout;
         

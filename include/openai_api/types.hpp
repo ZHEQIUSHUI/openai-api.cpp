@@ -85,6 +85,17 @@ struct ChatRequest {
     float presence_penalty = 0.0f;
     bool has_frequency_penalty = false;
     float frequency_penalty = 0.0f;
+    // vLLM / SGLang sampling extensions, plus OpenAI seed
+    bool has_top_k = false;
+    int top_k = -1;
+    bool has_min_p = false;
+    float min_p = 0.0f;
+    bool has_repetition_penalty = false;
+    float repetition_penalty = 1.0f;
+    bool has_seed = false;
+    int64_t seed = 0;
+    // stream_options.include_usage: send usage in a final chunk with empty choices
+    bool include_usage = false;
     
     // 原始 JSON（供扩展用）
     nlohmann::json raw;
@@ -148,10 +159,12 @@ struct ChatRequest {
         ChatRequest req;
         req.raw = j;
         
-        if (j.contains("model")) req.model = j["model"].get<std::string>();
-        if (j.contains("stream")) req.stream = j["stream"].get<bool>();
-        if (j.contains("temperature")) { req.has_temperature = true; req.temperature = j["temperature"].get<float>(); }
-        if (j.contains("top_p")) { req.has_top_p = true; req.top_p = j["top_p"].get<float>(); }
+        // Fields are read only when they have the expected JSON type; clients routinely send
+        // null for "not set" (e.g. "temperature": null), which must not fail the request.
+        if (j.contains("model") && j["model"].is_string()) req.model = j["model"].get<std::string>();
+        if (j.contains("stream") && j["stream"].is_boolean()) req.stream = j["stream"].get<bool>();
+        if (j.contains("temperature") && j["temperature"].is_number()) { req.has_temperature = true; req.temperature = j["temperature"].get<float>(); }
+        if (j.contains("top_p") && j["top_p"].is_number()) { req.has_top_p = true; req.top_p = j["top_p"].get<float>(); }
         if (j.contains("enable_thinking") && j["enable_thinking"].is_boolean()) {
             req.has_enable_thinking = true;
             req.enable_thinking = j["enable_thinking"].get<bool>();
@@ -181,8 +194,18 @@ struct ChatRequest {
             req.max_tokens = j["max_tokens"].get<int>();
         }
         if (j.contains("n") && j["n"].is_number_integer()) req.n = j["n"].get<int>();
-        if (j.contains("presence_penalty")) { req.has_presence_penalty = true; req.presence_penalty = j["presence_penalty"].get<float>(); }
-        if (j.contains("frequency_penalty")) { req.has_frequency_penalty = true; req.frequency_penalty = j["frequency_penalty"].get<float>(); }
+        if (j.contains("presence_penalty") && j["presence_penalty"].is_number()) { req.has_presence_penalty = true; req.presence_penalty = j["presence_penalty"].get<float>(); }
+        if (j.contains("frequency_penalty") && j["frequency_penalty"].is_number()) { req.has_frequency_penalty = true; req.frequency_penalty = j["frequency_penalty"].get<float>(); }
+        if (j.contains("top_k") && j["top_k"].is_number()) { req.has_top_k = true; req.top_k = j["top_k"].get<int>(); }
+        if (j.contains("min_p") && j["min_p"].is_number()) { req.has_min_p = true; req.min_p = j["min_p"].get<float>(); }
+        if (j.contains("repetition_penalty") && j["repetition_penalty"].is_number()) {
+            req.has_repetition_penalty = true;
+            req.repetition_penalty = j["repetition_penalty"].get<float>();
+        }
+        if (j.contains("seed") && j["seed"].is_number_integer()) { req.has_seed = true; req.seed = j["seed"].get<int64_t>(); }
+        if (j.contains("stream_options") && j["stream_options"].is_object()) {
+            req.include_usage = j["stream_options"].value("include_usage", false);
+        }
         
         if (j.contains("messages") && j["messages"].is_array()) {
             req.messages = j["messages"];
@@ -238,7 +261,7 @@ struct ChatRequest {
                 req.stop.push_back(j["stop"].get<std::string>());
             } else if (j["stop"].is_array()) {
                 for (const auto& s : j["stop"]) {
-                    req.stop.push_back(s.get<std::string>());
+                    if (s.is_string()) req.stop.push_back(s.get<std::string>());
                 }
             }
         }
