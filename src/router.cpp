@@ -136,13 +136,13 @@ bool ModelRouter::hasChatModel(const std::string& model_name) const {
     return chat_models_.find(model_name) != chat_models_.end();
 }
 
-std::optional<bool> ModelRouter::chatModelSupportsVision(const std::string& model_name) const {
+std::optional<std::vector<std::string>> ModelRouter::chatModelInputModalities(const std::string& model_name) const {
     std::shared_lock lock(mutex_);
     auto it = chat_models_.find(model_name);
     if (it == chat_models_.end()) {
         return std::nullopt;
     }
-    return it->second.options.supports_vision;
+    return it->second.options.resolved_input_modalities();
 }
 
 nlohmann::json ModelRouter::chatModelExtraFields(const std::string& model_name) const {

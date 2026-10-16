@@ -379,12 +379,14 @@ void Server::handleModels(const httplib::Request& req, httplib::Response& res) {
         model_j["object"] = "model";
         model_j["created"] = now;
         model_j["owned_by"] = options_.owner;
-        if (auto supports_vision = router_.chatModelSupportsVision(model_name);
-            supports_vision.has_value()) {
-            model_j["capabilities"]["vision"] = supports_vision.value();
-            model_j["input_modalities"] = supports_vision.value()
-                ? nlohmann::json::array({"text", "image"})
-                : nlohmann::json::array({"text"});
+        if (auto modalities = router_.chatModelInputModalities(model_name); modalities.has_value()) {
+            auto has = [&](const char* m) {
+                return std::find(modalities->begin(), modalities->end(), m) != modalities->end();
+            };
+            model_j["capabilities"]["vision"] = has("image");
+            model_j["capabilities"]["video"] = has("video");
+            model_j["capabilities"]["audio"] = has("audio");
+            model_j["input_modalities"] = *modalities;
         }
         auto extra_fields = router_.modelExtraFields(model_name);
         if (extra_fields.is_object()) {
@@ -472,13 +474,13 @@ void Server::handleChatCompletions(const httplib::Request& req, httplib::Respons
         return;
     }
 
-    if (request.has_image_inputs()) {
-        auto supports_vision = router_.chatModelSupportsVision(request.model);
-        if (supports_vision.has_value() && !supports_vision.value()) {
+    if (auto accepted = router_.chatModelInputModalities(request.model); accepted.has_value()) {
+        for (const auto& used : request.media_modalities()) {
+            if (std::find(accepted->begin(), accepted->end(), used) != accepted->end()) continue;
             res.status = 400;
             res.set_content(
                 ErrorEncoder::invalid_request(
-                    "Model '" + request.model + "' does not support image inputs"),
+                    "Model '" + request.model + "' does not support " + used + " inputs"),
                 "application/json");
             return;
         }

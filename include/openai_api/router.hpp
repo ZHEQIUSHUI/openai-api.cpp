@@ -49,7 +49,8 @@ public:
     bool hasASRModel(const std::string& model_name) const;
     bool hasTTSModel(const std::string& model_name) const;
     bool hasImageGenModel(const std::string& model_name) const;
-    std::optional<bool> chatModelSupportsVision(const std::string& model_name) const;
+    // Accepted input modalities (see ChatModelOptions::resolved_input_modalities); nullopt = unchecked.
+    std::optional<std::vector<std::string>> chatModelInputModalities(const std::string& model_name) const;
     nlohmann::json chatModelExtraFields(const std::string& model_name) const;
 
     // 任意类型模型(chat/embedding/asr/...)在 /v1/models 中附带的额外字段,

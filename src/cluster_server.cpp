@@ -287,6 +287,9 @@ bool ClusterServer::runAsMaster(int port) {
                         if (metadata.contains("supports_vision")) {
                             options.supports_vision = metadata.value("supports_vision", false);
                         }
+                        if (metadata.contains("input_modalities") && metadata["input_modalities"].is_array()) {
+                            options.input_modalities = metadata["input_modalities"].get<std::vector<std::string>>();
+                        }
                         if (metadata.contains("extra_fields") && metadata["extra_fields"].is_object()) {
                             options.extra_fields = metadata["extra_fields"];
                         }
@@ -451,6 +454,9 @@ bool ClusterServer::runAsWorker(const std::string& master_host, int master_port)
             if (model.type == cluster::ModelType::CHAT && model.chat_options.supports_vision.has_value()) {
                 metadata["supports_vision"] = model.chat_options.supports_vision.value();
             }
+            if (model.type == cluster::ModelType::CHAT && model.chat_options.input_modalities.has_value()) {
+                metadata["input_modalities"] = model.chat_options.input_modalities.value();
+            }
             if (model.type == cluster::ModelType::CHAT && model.chat_options.extra_fields.is_object() &&
                 !model.chat_options.extra_fields.empty()) {
                 metadata["extra_fields"] = model.chat_options.extra_fields;
@@ -573,6 +579,9 @@ void ClusterServer::registerLocalModelsToMaster() {
         nlohmann::json metadata = nlohmann::json::object();
         if (model.type == cluster::ModelType::CHAT && model.chat_options.supports_vision.has_value()) {
             metadata["supports_vision"] = model.chat_options.supports_vision.value();
+        }
+        if (model.type == cluster::ModelType::CHAT && model.chat_options.input_modalities.has_value()) {
+            metadata["input_modalities"] = model.chat_options.input_modalities.value();
         }
         if (model.type == cluster::ModelType::CHAT && model.chat_options.extra_fields.is_object() &&
             !model.chat_options.extra_fields.empty()) {

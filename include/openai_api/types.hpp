@@ -6,6 +6,7 @@
 #include <vector>
 #include <cstdint>
 #include <optional>
+#include <algorithm>
 
 namespace openai_api {
 
@@ -19,7 +20,17 @@ struct ChatContentPart {
     nlohmann::json raw;
 
     bool is_text() const { return type == "text"; }
-    bool is_image() const { return type == "image_url"; }
+    bool is_image() const { return type == "image_url" || type == "image"; }
+
+    // Input modality a content part carries: "text", "image", "video", "audio", or "" when unknown.
+    // Accepts the OpenAI part types plus the vLLM/SGLang extensions (video_url, audio_url).
+    std::string modality() const {
+        if (type == "text") return "text";
+        if (type == "image_url" || type == "image") return "image";
+        if (type == "video_url" || type == "video") return "video";
+        if (type == "input_audio" || type == "audio_url" || type == "audio") return "audio";
+        return "";
+    }
 };
 
 struct ParsedChatMessage {
@@ -37,7 +48,20 @@ struct ParsedChatMessage {
 
 struct ChatModelOptions {
     std::optional<bool> supports_vision;
+    // Input modalities the model accepts, e.g. {"text", "image", "video"}. When set, requests that
+    // carry any other modality are rejected with 400 and /v1/models lists exactly these. When unset,
+    // supports_vision decides ({"text", "image"} or {"text"}); when both are unset nothing is checked.
+    std::optional<std::vector<std::string>> input_modalities;
     nlohmann::json extra_fields = nlohmann::json::object();
+
+    std::optional<std::vector<std::string>> resolved_input_modalities() const {
+        if (input_modalities.has_value()) return input_modalities;
+        if (supports_vision.has_value()) {
+            if (supports_vision.value()) return std::vector<std::string>{"text", "image"};
+            return std::vector<std::string>{"text"};
+        }
+        return std::nullopt;
+    }
 };
 
 struct ChatRequest {
@@ -79,6 +103,19 @@ struct ChatRequest {
             }
         }
         return count;
+    }
+
+    // Distinct non-text modalities used by the request, in first-seen order.
+    std::vector<std::string> media_modalities() const {
+        std::vector<std::string> out;
+        for (const auto& message : parsed_messages) {
+            for (const auto& part : message.content_parts) {
+                const std::string m = part.modality();
+                if (m.empty() || m == "text") continue;
+                if (std::find(out.begin(), out.end(), m) == out.end()) out.push_back(m);
+            }
+        }
+        return out;
     }
 
     std::vector<std::string> image_urls() const {
