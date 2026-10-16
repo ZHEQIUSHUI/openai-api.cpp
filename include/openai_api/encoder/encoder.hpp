@@ -221,8 +221,11 @@ public:
         // Native tool calling: if the producer attached tool_calls to the chunk, emit an
         // OpenAI tool_calls message (finish_reason "tool_calls") instead of a text message.
         if (chunk.obj.contains("tool_calls") && chunk.obj["tool_calls"].is_array() && !chunk.obj["tool_calls"].empty()) {
-            choice["message"]["content"] = nullptr;
+            // text the model wrote before its calls stays in content (null when there is none)
+            choice["message"]["content"] = chunk.text.empty() ? nlohmann::json(nullptr) : nlohmann::json(chunk.text);
             choice["message"]["tool_calls"] = chunk.obj["tool_calls"];
+            if (chunk.obj.contains("reasoning_content"))
+                choice["message"]["reasoning_content"] = chunk.obj["reasoning_content"];
             choice["finish_reason"] = "tool_calls";
         } else {
             choice["message"]["content"] = chunk.text;
